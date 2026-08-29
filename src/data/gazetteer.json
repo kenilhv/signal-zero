@@ -1,0 +1,322 @@
+[
+  {
+    "id": "np-rasuwa-timure",
+    "name": "Timure",
+    "district": "Rasuwa",
+    "lat": 28.216,
+    "lon": 85.383,
+    "population": 1240,
+    "hazardTier": 3,
+    "aliases": ["Timure Bazar", "Rasuwagadhi", "Timure Bazaar"]
+  },
+  {
+    "id": "np-rasuwa-syabrubesi",
+    "name": "Syabrubesi",
+    "district": "Rasuwa",
+    "lat": 28.163,
+    "lon": 85.335,
+    "population": 3180,
+    "hazardTier": 3,
+    "aliases": ["Syaphrubesi", "Shyaphrubesi", "Syabru Besi", "Syabrubensi"]
+  },
+  {
+    "id": "np-rasuwa-haku",
+    "name": "Haku",
+    "district": "Rasuwa",
+    "lat": 28.062,
+    "lon": 85.288,
+    "population": 2110,
+    "hazardTier": 3,
+    "aliases": ["Haku Besi", "Hakubesi", "Haku Gaun"]
+  },
+  {
+    "id": "np-rasuwa-dhunche",
+    "name": "Dhunche",
+    "district": "Rasuwa",
+    "lat": 28.112,
+    "lon": 85.297,
+    "population": 5420,
+    "hazardTier": 2,
+    "aliases": ["Dunche", "Dhunche Bazar", "Dhunchhe"]
+  },
+  {
+    "id": "np-rasuwa-gosaikunda",
+    "name": "Gosaikunda",
+    "district": "Rasuwa",
+    "lat": 28.084,
+    "lon": 85.392,
+    "population": 940,
+    "hazardTier": 1,
+    "aliases": ["Gosainkunda", "Gosaikund", "Gosain Kunda"]
+  },
+  {
+    "id": "np-rasuwa-uttargaya",
+    "name": "Uttargaya",
+    "district": "Rasuwa",
+    "lat": 28.028,
+    "lon": 85.281,
+    "population": 2860,
+    "hazardTier": 3,
+    "aliases": ["Uttar Gaya", "Uttargaya Gaunpalika", "Uttargaya Dham"]
+  },
+  {
+    "id": "np-rasuwa-ramche",
+    "name": "Ramche",
+    "district": "Rasuwa",
+    "lat": 28.013,
+    "lon": 85.243,
+    "population": 2470,
+    "hazardTier": 2,
+    "aliases": ["Ramche Bazar", "Naukunda", "Ramchhe"]
+  },
+  {
+    "id": "np-rasuwa-kalikasthan",
+    "name": "Kalikasthan",
+    "district": "Rasuwa",
+    "lat": 27.988,
+    "lon": 85.186,
+    "population": 4130,
+    "hazardTier": 1,
+    "aliases": ["Kalika Sthan", "Kalikasthan Bazar", "Kalika"]
+  },
+  {
+    "id": "np-rasuwa-thulogaun",
+    "name": "Thulogaun",
+    "district": "Rasuwa",
+    "lat": 28.098,
+    "lon": 85.196,
+    "population": 1630,
+    "hazardTier": 1,
+    "aliases": ["Thulo Gaun", "Thulogaon", "Parbatikunda", "Thulo Gaon"]
+  },
+  {
+    "id": "np-nuwakot-betrawati",
+    "name": "Betrawati",
+    "district": "Nuwakot",
+    "lat": 27.966,
+    "lon": 85.183,
+    "population": 4820,
+    "hazardTier": 3,
+    "aliases": ["Betrabati", "Betrawoti", "Betrawati Bazar", "Betrabati Bazaar"]
+  },
+  {
+    "id": "np-nuwakot-trishuli-bazar",
+    "name": "Trishuli Bazar",
+    "district": "Nuwakot",
+    "lat": 27.92,
+    "lon": 85.142,
+    "population": 12600,
+    "hazardTier": 3,
+    "aliases": ["Trisuli Bazar", "Trishuli", "Trisuli Bazaar", "Trishuli Bajar"]
+  },
+  {
+    "id": "np-nuwakot-battar",
+    "name": "Battar",
+    "district": "Nuwakot",
+    "lat": 27.905,
+    "lon": 85.155,
+    "population": 6240,
+    "hazardTier": 3,
+    "aliases": ["Batar", "Battar Bazar", "Battar Chowk"]
+  },
+  {
+    "id": "np-nuwakot-devighat",
+    "name": "Devighat",
+    "district": "Nuwakot",
+    "lat": 27.902,
+    "lon": 85.161,
+    "population": 3410,
+    "hazardTier": 3,
+    "aliases": ["Debighat", "Devi Ghat", "Devighat Bazar"]
+  },
+  {
+    "id": "np-nuwakot-bidur",
+    "name": "Bidur",
+    "district": "Nuwakot",
+    "lat": 27.87,
+    "lon": 85.15,
+    "population": 28400,
+    "hazardTier": 3,
+    "aliases": ["Bidur Nagarpalika", "Vidur", "Bidur Municipality", "Nuwakot Bazar"]
+  },
+  {
+    "id": "np-nuwakot-belkotgadhi",
+    "name": "Belkotgadhi",
+    "district": "Nuwakot",
+    "lat": 27.845,
+    "lon": 85.18,
+    "population": 21100,
+    "hazardTier": 2,
+    "aliases": ["Belkot", "Belkot Gadhi", "Belkotgadi", "Belkotgadhi Nagarpalika"]
+  },
+  {
+    "id": "np-nuwakot-tadi",
+    "name": "Tadi",
+    "district": "Nuwakot",
+    "lat": 27.903,
+    "lon": 85.102,
+    "population": 11250,
+    "hazardTier": 2,
+    "aliases": ["Taadi", "Tadi Gaunpalika", "Chaughada", "Taadi Khola"]
+  },
+  {
+    "id": "np-nuwakot-suryagadhi",
+    "name": "Suryagadhi",
+    "district": "Nuwakot",
+    "lat": 27.938,
+    "lon": 85.098,
+    "population": 10620,
+    "hazardTier": 2,
+    "aliases": ["Suryagadi", "Samundratar", "Surya Gadhi"]
+  },
+  {
+    "id": "np-nuwakot-meghang",
+    "name": "Meghang",
+    "district": "Nuwakot",
+    "lat": 27.928,
+    "lon": 85.208,
+    "population": 7340,
+    "hazardTier": 2,
+    "aliases": ["Meghang Gaunpalika", "Meghan", "Meghang Chhap"]
+  },
+  {
+    "id": "np-nuwakot-kispang",
+    "name": "Kispang",
+    "district": "Nuwakot",
+    "lat": 27.905,
+    "lon": 85.035,
+    "population": 9840,
+    "hazardTier": 1,
+    "aliases": ["Kispang Gaunpalika", "Kispan", "Kispang Bazar"]
+  },
+  {
+    "id": "np-nuwakot-panchakanya",
+    "name": "Panchakanya",
+    "district": "Nuwakot",
+    "lat": 27.804,
+    "lon": 85.082,
+    "population": 10460,
+    "hazardTier": 1,
+    "aliases": ["Panchkanya", "Pancha Kanya", "Charghare"]
+  },
+  {
+    "id": "np-nuwakot-dupcheshwar",
+    "name": "Dupcheshwar",
+    "district": "Nuwakot",
+    "lat": 27.955,
+    "lon": 85.289,
+    "population": 8720,
+    "hazardTier": 1,
+    "aliases": ["Dupcheshwor", "Dupche", "Ghyangphedi", "Dupcheswar"]
+  },
+  {
+    "id": "np-nuwakot-shivapuri",
+    "name": "Shivapuri",
+    "district": "Nuwakot",
+    "lat": 27.847,
+    "lon": 85.271,
+    "population": 12830,
+    "hazardTier": 1,
+    "aliases": ["Sivapuri", "Shivapuri Gaunpalika", "Shibapuri"]
+  },
+  {
+    "id": "np-nuwakot-tarkeshwar",
+    "name": "Tarkeshwar",
+    "district": "Nuwakot",
+    "lat": 27.876,
+    "lon": 85.216,
+    "population": 11540,
+    "hazardTier": 1,
+    "aliases": ["Tarkeshwor", "Tarkeswar", "Tarkeshwar Gaunpalika"]
+  },
+  {
+    "id": "np-nuwakot-likhu",
+    "name": "Likhu",
+    "district": "Nuwakot",
+    "lat": 27.792,
+    "lon": 85.238,
+    "population": 9120,
+    "hazardTier": 1,
+    "aliases": ["Likhu Gaunpalika", "Lickhu", "Likhu Khola"]
+  },
+  {
+    "id": "np-dhading-galchhi",
+    "name": "Galchhi",
+    "district": "Dhading",
+    "lat": 27.796,
+    "lon": 85.0,
+    "population": 5930,
+    "hazardTier": 3,
+    "aliases": ["Galchi", "Galchhi Bazar", "Galchhi Gaunpalika"]
+  },
+  {
+    "id": "np-dhading-gajuri",
+    "name": "Gajuri",
+    "district": "Dhading",
+    "lat": 27.766,
+    "lon": 84.907,
+    "population": 7410,
+    "hazardTier": 3,
+    "aliases": ["Gajuri Bazar", "Gajoori", "Gajuri Gaunpalika"]
+  },
+  {
+    "id": "np-dhading-benighat",
+    "name": "Benighat",
+    "district": "Dhading",
+    "lat": 27.8,
+    "lon": 84.8,
+    "population": 6870,
+    "hazardTier": 3,
+    "aliases": ["Beni Ghat", "Benighat Rorang", "Benighat Bazar"]
+  },
+  {
+    "id": "np-dhading-nilkantha",
+    "name": "Nilkantha",
+    "district": "Dhading",
+    "lat": 27.868,
+    "lon": 84.898,
+    "population": 32200,
+    "hazardTier": 2,
+    "aliases": ["Nilkantha Nagarpalika", "Dhading Besi", "Dhadingbesi", "Neelkantha"]
+  },
+  {
+    "id": "np-dhading-thakre",
+    "name": "Thakre",
+    "district": "Dhading",
+    "lat": 27.759,
+    "lon": 85.031,
+    "population": 14260,
+    "hazardTier": 2,
+    "aliases": ["Thakre Gaunpalika", "Kalleri", "Thakre Khola"]
+  },
+  {
+    "id": "np-dhading-dhunibesi",
+    "name": "Dhunibesi",
+    "district": "Dhading",
+    "lat": 27.716,
+    "lon": 85.133,
+    "population": 18640,
+    "hazardTier": 1,
+    "aliases": ["Dhuni Besi", "Dhunibesi Nagarpalika", "Dhunibensi"]
+  },
+  {
+    "id": "np-dhading-netrawati",
+    "name": "Netrawati",
+    "district": "Dhading",
+    "lat": 27.943,
+    "lon": 84.947,
+    "population": 6120,
+    "hazardTier": 1,
+    "aliases": ["Netrawati Dabjong", "Netravati", "Netrawoti"]
+  },
+  {
+    "id": "np-dhading-khaniyabas",
+    "name": "Khaniyabas",
+    "district": "Dhading",
+    "lat": 27.932,
+    "lon": 84.828,
+    "population": 5240,
+    "hazardTier": 1,
+    "aliases": ["Khaniyabash", "Khaniyabas Gaunpalika", "Khaniabas"]
+  }
+]

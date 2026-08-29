@@ -1,0 +1,410 @@
+# =============================================================================
+# Signal Zero - TrueForge harness catalog
+# =============================================================================
+# TrueForge: https://github.com/truefoundry/trueforge (MIT) · @truefoundry/trueforge-sdk
+#
+# -----------------------------------------------------------------------------
+# PROVENANCE - what is verified against upstream, and what is our own convention
+# -----------------------------------------------------------------------------
+# Verified on 2026-08-29 by reading the TrueForge repo at main:
+#   packages/trueforge/catalog/{model,mcp,skill,sandbox}-catalog.yaml
+#   packages/trueforge-core/src/agent-session/schemas/agentSpec.ts   (zod, authoritative)
+#   packages/trueforge-sdk/src/api/types/Catalog*.ts                 (generated types)
+#   docs/harness/initial-setup.mdx, docs/create-agent/overview.mdx
+#
+# VERIFIED field names and shapes
+#   * mcp-catalog.yaml   -> top-level `mcp_servers:`; entry keys
+#                           {type, name, logo, url, description, auth}
+#                           `type` is the literal `remote` ONLY (McpServerType = "remote").
+#                           `auth` is {type: dcr} or {type: header, headers: {...}}.
+#                           Bright Data ships in the upstream catalog verbatim as
+#                           name `bright-data`, url https://mcp.brightdata.com/mcp.
+#   * model-catalog.yaml -> top-level `providers:`; entry keys {type, logo, models[]};
+#                           model keys {model_id, name, properties};
+#                           properties keys {context_length, max_output_tokens, reasoning_efforts}.
+#                           `type` is one of: openai, anthropic, google-gemini, fireworks,
+#                           zai, moonshot, alibaba, together, custom.
+#                           A `custom` provider entry carries {type, supported_reasoning_efforts}.
+#   * skill-catalog.yaml -> top-level `skills:`; entry keys {type, name, url, path, ref, description}.
+#                           `type` is the literal `git` ONLY (SkillType = "git").
+#   * sandbox-catalog.yaml -> top-level `providers:`; entry keys
+#                           {type, exec_timeout_ms, auto_stop_interval_in_minutes,
+#                            auto_archive_interval_in_minutes, auto_delete_interval_in_minutes}.
+#                           `type` is the literal `daytona` ONLY.
+#   * Agent spec (snake_case wire form, every field except `model` has a default):
+#       model: {name: "provider/model", params: {max_tokens, temperature, top_p, top_k,
+#                                                parallel_tool_calls, reasoning_effort, ...}}
+#       instructions: <string>
+#       messages: [{type: "user.message", content: <string>}]
+#       mcp_servers: [{name, enable_tools, disable_tools, preload_tools,
+#                      require_approval_for_tools, preload}]
+#       skills: [{name}]
+#       response_format: {...}
+#       config: {iteration_limit, sandbox: {enabled, file_downloads},
+#                dynamic_sub_agents: {enabled},
+#                context_management: {compaction: {enabled, trigger: {type: input_tokens, value}},
+#                                     large_tool_response: {enabled}},
+#                generative_ui: {enabled}, ask_user_questions: {enabled}}
+#   * Tool selector tags: enable/disable/preload accept `@all` and `@read-only`;
+#     require_approval_for_tools accepts `@all`, `@write`, `@destructive`.
+#     Default for require_approval_for_tools is ["@write", "@destructive"].
+#   * Catalog override env vars: MODEL_CATALOG_PATH, MCP_CATALOG_PATH,
+#     SKILL_CATALOG_PATH, SANDBOX_CATALOG_PATH.
+#
+# BEST-EFFORT / OUR OWN CONVENTION - not upstream schema, do not assume it validates
+#   * THIS SINGLE FILE. Upstream ships FOUR separate catalog files, each pointed at by
+#     its own env var. Both model-catalog.yaml and sandbox-catalog.yaml use a top-level
+#     `providers:` key, so they cannot be merged verbatim. Below they are renamed
+#     `model_providers:` and `sandbox_providers:` purely so one file can hold both.
+#     To feed real TrueForge, split this file - see "SPLITTING THIS FILE" at the bottom.
+#   * `${ENV_VAR}` interpolation. The upstream catalogs use literal placeholder strings
+#     (e.g. `Authorization: Bearer YOUR_BRIGHT_DATA_API_TOKEN`) because catalogs are
+#     discovery-only: real credentials are entered in Settings and stored in TrueForge's
+#     database, never read from this file. `${...}` here documents WHICH env var holds
+#     the secret. It is not known to be expanded by the server.
+#   * `base_url` / `api_key_env` on a custom model provider. CatalogCustomModelProvider
+#     declares only {type, supported_reasoning_efforts}; the endpoint URL and key are
+#     entered in Settings -> Models. Kept here as documentation of intent.
+#   * The whole `agents:` section. TrueForge has no agent catalog YAML - agents are
+#     created via POST /api/v1/agents with {name, manifest: <AgentSpec>}, or passed
+#     inline on a session. Each `manifest` below IS a real verified AgentSpec; the
+#     wrapper list and `instructions_file` are ours. AgentSpec takes `instructions` as
+#     an INLINE STRING, so scripts/load-agents must read the .md file (stripping its
+#     YAML frontmatter) and inline it before POSTing.
+#   * The whole `human_checkpoint:` section. TrueForge's human-in-the-loop is
+#     `require_approval_for_tools` (verified, used below) which gates a TOOL CALL with
+#     an Allow/Deny prompt. It has no concept of a NAMED approver. Signal Zero's
+#     "nothing is actionable without a name" rule is enforced by our own server in
+#     src/server.js, which returns 400 when `approvedBy` is missing or blank.
+#     This section documents that contract; it is not read by TrueForge.
+#   * `metadata:` and `notes:` keys are ours and are ignored by upstream.
+# =============================================================================
+
+metadata:                                       # best-effort: ours, not upstream
+  name: signal-zero
+  version: 1.0.0
+  description: >-
+    Ranks settlements by how anomalously long they have gone SILENT, instead of
+    ranking by report volume. Demo scenario: the 2026-08-26 Trishuli river glacial
+    lake outburst flood affecting Nuwakot, Rasuwa and Dhading districts, Nepal.
+  hard_rules:
+    - No dispatch instruction is ever emitted. No dispatch-shaped field exists in
+      any data structure. Approval unlocks a sorted candidate list, never an assignment.
+    - No LLM inside dedup scoring or ranking math. Fellegi-Sunter, the Exponential TBE
+      baseline and Getis-Ord Gi* are deterministic and auditable.
+    - The ONLY LLM touchpoint in the system is triage tier 3 (low-confidence fallback).
+    - Escalations require a non-empty approver name, enforced in server code.
+
+# -----------------------------------------------------------------------------
+# MODEL PROVIDERS
+# Upstream file: packages/trueforge/catalog/model-catalog.yaml (top-level key `providers:`)
+# Renamed here to `model_providers:` only because this file also carries sandbox providers.
+# -----------------------------------------------------------------------------
+model_providers:
+
+  # An OpenAI-compatible endpoint. `type: custom` and `supported_reasoning_efforts`
+  # are VERIFIED (CatalogCustomModelProvider). `base_url` and `api_key_env` are
+  # BEST-EFFORT documentation - upstream collects both in Settings -> Models.
+  - type: custom
+    supported_reasoning_efforts: [none, low, medium, high]
+    base_url: ${OPENAI_BASE_URL}                # best-effort; default https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY                 # best-effort; secret never lives in this file
+    models:
+      - model_id: ${OPENAI_MODEL}               # best-effort interpolation; default gpt-4o-mini
+        name: signal-zero-triage-fallback
+        properties:
+          context_length: 128000
+          max_output_tokens: 16384
+          reasoning_efforts: [none, low, medium]
+
+# -----------------------------------------------------------------------------
+# MCP SERVERS
+# Upstream file: packages/trueforge/catalog/mcp-catalog.yaml (top-level key `mcp_servers:`)
+# -----------------------------------------------------------------------------
+mcp_servers:
+
+  # Bright Data - the INGEST stage's only route to the live web.
+  #
+  # NOTE ON TRANSPORT: the project brief specified `npx @brightdata/mcp` with an
+  # API_TOKEN env var (stdio transport). That is NOT expressible in a TrueForge MCP
+  # catalog: McpServerType is the single literal "remote", and every entry requires a
+  # `url`. So the VERIFIED remote form is used here - it is exactly how Bright Data
+  # ships in the upstream catalog. The stdio server is still the right thing for local
+  # development outside the harness:
+  #     npx -y @brightdata/mcp        with env API_TOKEN=$BRIGHTDATA_API_TOKEN
+  # Signal Zero's own src/pipeline/ingest.js talks to Bright Data directly and does not
+  # depend on either transport; with no token it runs the bundled offline corpus.
+  - type: remote
+    name: bright-data
+    url: https://mcp.brightdata.com/mcp
+    description: >-
+      Search the web and scrape pages, including sites behind bot protection. Used by
+      the INGEST stage to collect news, social and official reports about the Trishuli
+      GLOF. Read-only for this project.
+    auth:
+      type: header
+      headers:
+        # Upstream ships the literal placeholder `Bearer YOUR_BRIGHT_DATA_API_TOKEN`.
+        # `${...}` here is best-effort and documents which env var holds the secret.
+        Authorization: Bearer ${BRIGHTDATA_API_TOKEN}
+
+# -----------------------------------------------------------------------------
+# SANDBOX PROVIDERS
+# Upstream file: packages/trueforge/catalog/sandbox-catalog.yaml (top-level key `providers:`)
+# Renamed here to `sandbox_providers:` for the same single-file reason as above.
+# Signal Zero's own agents run with `config.sandbox.enabled: false` - they need no
+# code execution. This entry exists so the harness has a provider if a sandbox is
+# ever switched on (a sandbox is required before any `skills:` can be attached).
+# -----------------------------------------------------------------------------
+sandbox_providers:
+  - type: daytona
+    exec_timeout_ms: 60000
+    auto_stop_interval_in_minutes: 5
+    auto_archive_interval_in_minutes: 60
+    auto_delete_interval_in_minutes: 7200
+
+# -----------------------------------------------------------------------------
+# SKILLS
+# Upstream file: packages/trueforge/catalog/skill-catalog.yaml (top-level key `skills:`)
+# Signal Zero attaches NO skills. Skills are git-backed SKILL.md packs sparse-cloned
+# into a sandbox, and attaching any of them would require `config.sandbox.enabled: true`
+# on every agent. Our agents are prompt-and-tools only. Left empty deliberately rather
+# than padded with entries we do not use.
+# -----------------------------------------------------------------------------
+skills: []
+
+# -----------------------------------------------------------------------------
+# AGENTS
+# BEST-EFFORT WRAPPER. TrueForge has no agent catalog file. Each `manifest:` below is
+# a real, verified AgentSpec - the exact body you would POST to /api/v1/agents as
+# {name, manifest}. `instructions_file` is our convention: the loader reads the .md,
+# strips its YAML frontmatter, and inlines the prose into `manifest.instructions`,
+# because AgentSpec.instructions is a plain string.
+# -----------------------------------------------------------------------------
+agents:
+
+  # ---- ROOT ORCHESTRATOR ----------------------------------------------------
+  - name: crisis-coordination-agent
+    instructions_file: agents/crisis-coordination-agent.md   # best-effort key
+    manifest:
+      model:
+        name: custom/signal-zero-triage-fallback
+        params:
+          temperature: 0.1
+          max_tokens: 4096
+      mcp_servers:
+        - name: bright-data
+          enable_tools: ["@read-only"]        # root agent observes; it never writes
+          require_approval_for_tools: ["@all"]
+          preload: false
+      config:
+        iteration_limit: 60
+        sandbox:
+          enabled: false
+        dynamic_sub_agents:
+          enabled: true                       # fans out to the four specialists below
+        generative_ui:
+          enabled: false                      # the dashboard is our own static /web UI
+        ask_user_questions:
+          enabled: true                       # asking a human is always allowed
+        context_management:
+          compaction:
+            enabled: true
+            trigger:
+              type: input_tokens
+              value: 90000
+          large_tool_response:
+            enabled: true
+      messages:
+        - type: user.message
+          content: >-
+            Standing context: you rank settlements by anomalous SILENCE, never by report
+            volume. You never emit a dispatch instruction, never name a destination, and
+            never approve a checkpoint item. Approval by a named human unlocks a sorted
+            candidate list for humans to read - never an assignment.
+
+  # ---- INGEST ---------------------------------------------------------------
+  - name: ingestion-agent
+    instructions_file: agents/ingestion-agent.md
+    manifest:
+      model:
+        name: custom/signal-zero-triage-fallback
+        params:
+          temperature: 0.0
+          max_tokens: 8192
+      mcp_servers:
+        - name: bright-data
+          enable_tools: ["@read-only"]        # collection only; no write tool is exposed
+          require_approval_for_tools: ["@all"]
+          preload: false
+      config:
+        iteration_limit: 40
+        sandbox:
+          enabled: false
+        dynamic_sub_agents:
+          enabled: false                      # one collector, one auditable trail
+        generative_ui:
+          enabled: false
+        ask_user_questions:
+          enabled: false                      # a subagent cannot talk to the user anyway
+      messages:
+        - type: user.message
+          content: >-
+            Standing context: preserve every original URL and publisher timestamp exactly.
+            Never drop a failing source silently - every failure becomes a degraded-source
+            entry. Never classify, never resolve a settlement, never invent a report.
+
+  # ---- TRIAGE (tier 3 only - the ONLY LLM touchpoint in the system) ----------
+  - name: triage-agent
+    instructions_file: agents/triage-agent.md
+    manifest:
+      model:
+        name: custom/signal-zero-triage-fallback
+        params:
+          temperature: 0.0                    # classification must be as stable as we can make it
+          max_tokens: 4096
+      mcp_servers: []                         # no tools: text in, classification out
+      config:
+        iteration_limit: 20
+        sandbox:
+          enabled: false
+        dynamic_sub_agents:
+          enabled: false
+        generative_ui:
+          enabled: false
+        ask_user_questions:
+          enabled: false
+      messages:
+        - type: user.message
+          content: >-
+            Standing context: you are tier 3, the low-confidence fallback, and every time
+            you run an llm-fallback incident is written to the visible fail feed. Every
+            classification requires verbatim quoted evidence and a written rationale. You
+            never touch dedup scoring or ranking math.
+
+  # ---- ESCALATION DRAFTING (prepares only - never sends, never names a destination) ----
+  - name: escalation-drafting-agent
+    instructions_file: agents/escalation-drafting-agent.md
+    manifest:
+      model:
+        name: custom/signal-zero-triage-fallback
+        params:
+          temperature: 0.2
+          max_tokens: 4096
+      mcp_servers: []                         # deliberately empty: no tool can send anything
+      config:
+        iteration_limit: 20
+        sandbox:
+          enabled: false
+        dynamic_sub_agents:
+          enabled: false
+        generative_ui:
+          enabled: false
+        ask_user_questions:
+          enabled: false
+      messages:
+        - type: user.message
+          content: >-
+            Standing context: you PREPARE, you never send. No recipient, no agency, no
+            destination, no dispatch instruction anywhere in your output. Everything you
+            draft is emitted with status "pending" and approvedBy null, and stays inert
+            until a named human approves it. benignExplanations is never empty.
+
+  # ---- ARCHITECTURE REVIEW (read-only auditor) ------------------------------
+  - name: architecture-review-agent
+    instructions_file: agents/architecture-review-agent.md
+    manifest:
+      model:
+        name: custom/signal-zero-triage-fallback
+        params:
+          temperature: 0.0
+          max_tokens: 8192
+      mcp_servers: []                         # reads the repo it is given; changes nothing
+      config:
+        iteration_limit: 40
+        sandbox:
+          enabled: false
+        dynamic_sub_agents:
+          enabled: false
+        generative_ui:
+          enabled: false
+        ask_user_questions:
+          enabled: false
+      messages:
+        - type: user.message
+          content: >-
+            Standing context: audit the four hard rules - no dispatch-shaped output, no LLM
+            in dedup or ranking math, non-empty approver name enforced in server code, and
+            failures always surfaced to the fail feed. Read-only. Every finding needs a
+            file, a line and a verbatim quote. Any critical finding makes the verdict fail.
+
+# -----------------------------------------------------------------------------
+# HUMAN CHECKPOINT
+# BEST-EFFORT / DOCUMENTATION ONLY. TrueForge is not read from this section.
+#
+# What TrueForge actually provides (VERIFIED): `require_approval_for_tools` on each
+# attached MCP server pauses the agent before a gated tool call and shows the user an
+# Allow / Deny prompt in the chat UI. Selectors are `@all`, `@write`, `@destructive`,
+# or literal tool names; the default is ["@write", "@destructive"]. Subagent tool calls
+# that require approval still pause for the user. There is NO named-approver concept.
+#
+# What Signal Zero adds (enforced in OUR code, in src/server.js):
+# an approve or reject request with a missing, null, empty or whitespace-only
+# `approvedBy` is rejected with HTTP 400. Nothing becomes actionable without a name.
+# -----------------------------------------------------------------------------
+human_checkpoint:
+  enforced_by: src/server.js                  # server-side, not UI-side; a UI-only check is a bug
+  approver_name_required: true
+  approver_field: approvedBy
+  reject_on_blank_approver: true              # whitespace-only is blank
+  http_status_on_missing_approver: 400
+
+  gated_kinds:
+    - kind: escalation
+      description: >-
+        A drafted escalation packet for an anomalously silent settlement. Held pending
+        until a named human approves or rejects it.
+    - kind: ambiguous-match
+      description: >-
+        A Fellegi-Sunter pairwise match probability that landed in the ambiguous band
+        between the auto-merge and auto-reject thresholds. Held pending; the two reports
+        are neither merged nor separated until a named human decides.
+
+  states: [pending, approved, rejected]
+  decision_fields: [approvedBy, decidedAt]
+
+  # The point of the gate. Read this before changing anything above.
+  unlocks: sorted-candidate-list              # a ranked list for humans to READ
+  never_unlocks: assignment                   # never a dispatch, destination or task
+  notes:
+    - Approval unlocks a sorted candidate list, never an assignment. No dispatch-shaped
+      field exists in CheckpointItem, RankedSettlement or IncidentEvent.
+    - Agents cannot approve. `approvedBy` must come from a human; no agent name,
+      system name or placeholder is accepted.
+    - A pending item never influences the ranked list and is never presented as
+      actionable.
+
+# -----------------------------------------------------------------------------
+# SPLITTING THIS FILE for a real TrueForge server
+# -----------------------------------------------------------------------------
+# This file is a single-document catalog for review and submission. To point a
+# self-hosted TrueForge at it, split it into the four upstream files and set the
+# override env vars:
+#
+#   model-catalog.yaml    <- `model_providers:`   renamed back to `providers:`
+#     MODEL_CATALOG_PATH=./catalog/model-catalog.yaml
+#   mcp-catalog.yaml      <- `mcp_servers:`       verbatim
+#     MCP_CATALOG_PATH=./catalog/mcp-catalog.yaml
+#   skill-catalog.yaml    <- `skills:`            verbatim (empty list)
+#     SKILL_CATALOG_PATH=./catalog/skill-catalog.yaml
+#   sandbox-catalog.yaml  <- `sandbox_providers:` renamed back to `providers:`
+#     SANDBOX_CATALOG_PATH=./catalog/sandbox-catalog.yaml
+#
+# Then create the five agents from the `agents:` section via the SDK - for each entry,
+# read `instructions_file`, strip its YAML frontmatter, set it as `manifest.instructions`,
+# and POST {name, manifest} to /api/v1/agents.
+#
+# Reminder: catalogs are discovery lists only. Credentials for the Bright Data connector
+# and the OpenAI-compatible model provider are entered in TrueForge Settings and stored
+# in its database. No secret belongs in this file.
+# -----------------------------------------------------------------------------

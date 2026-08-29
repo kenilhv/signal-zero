@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Signal Zero — Coordinator Console</title>
+<meta name="description" content="Signal Zero ranks settlements by anomalous silence, not report volume. Trishuli GLOF response console." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1015'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23f0a02a' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23f0a02a'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- ══════════════ TOP BAR ══════════════ -->
+<header class="topbar" role="banner">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <span class="brand-ring"></span><span class="brand-dot"></span>
+    </div>
+    <div class="brand-text">
+      <h1>SIGNAL&nbsp;ZERO</h1>
+      <p>Ranking by <em>silence</em>, not by volume · Trishuli GLOF · Aug 26 2026</p>
+    </div>
+  </div>
+
+  <div class="sources" id="sources" aria-label="Source health">
+    <span class="rail-label">SOURCES</span>
+    <div class="chips" id="source-chips"><span class="chip chip--idle">no sources yet</span></div>
+  </div>
+
+  <div class="topbar-actions">
+    <div class="stat-cluster" id="stat-cluster">
+      <div class="stat"><b id="stat-reports">—</b><span>reports</span></div>
+      <div class="stat"><b id="stat-clusters">—</b><span>clusters</span></div>
+      <div class="stat"><b id="stat-lastrun">—</b><span>last run</span></div>
+    </div>
+
+    <button id="btn-run" class="btn btn--primary" type="button">
+      <span class="btn-spinner" aria-hidden="true"></span>
+      <span class="btn-label">Run pipeline</span>
+    </button>
+
+    <div class="demo-group" role="group" aria-label="Demo failure injection">
+      <span class="demo-tag">DEMO</span>
+      <button class="btn btn--ghost" type="button" data-fail="source">Break a source</button>
+      <button class="btn btn--ghost" type="button" data-fail="ambiguous">Force ambiguous match</button>
+      <button class="btn btn--ghost" type="button" data-fail="coldstart">Force cold-start</button>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════ CONNECTION BANNER ══════════════ -->
+<div id="offline-banner" class="offline-banner" role="status" hidden>
+  <span class="dot-pulse" aria-hidden="true"></span>
+  <strong>API unreachable.</strong>
+  <span id="offline-detail">Retrying every 4s — showing last known state.</span>
+</div>
+
+<!-- ══════════════ MAIN ══════════════ -->
+<main class="layout">
+
+  <!-- MAP -->
+  <section class="map-pane" aria-label="Silence map">
+    <div id="map"></div>
+
+    <div class="map-legend" aria-hidden="false">
+      <h2>Silence intensity <span class="legend-sub">Getis-Ord Gi* z</span></h2>
+      <div class="ramp"><i style="background:#1c7f74"></i><i style="background:#3f8f6d"></i><i style="background:#8f9351"></i><i style="background:#d99a2b"></i><i style="background:#e2691f"></i><i style="background:#d1341f"></i></div>
+      <div class="ramp-ends"><span>calm / corroborated</span><span>anomalously silent</span></div>
+      <ul class="legend-keys">
+        <li><span class="k k-anom"></span>local anomaly (|z|&nbsp;&gt;&nbsp;1.96) — pulsing ring</li>
+        <li><span class="k k-cold"></span>cold start — <em>no data</em>, not silence</li>
+        <li><span class="k k-edge"></span>river-corridor adjacency</li>
+        <li><span class="k k-size"></span>circle size = population</li>
+      </ul>
+      <p class="legend-note" id="legend-corridor-note"></p>
+    </div>
+
+    <div class="map-hint" id="map-hint">Click any settlement for its evidence trail.</div>
+  </section>
+
+  <!-- RIGHT RAIL -->
+  <aside class="rail" aria-label="Rankings and activity">
+
+    <section class="rail-block rail-block--rank">
+      <header class="rail-head">
+        <h2>Silence Rank</h2>
+        <span class="rail-count" id="rank-count">0</span>
+      </header>
+
+      <div class="rank-table-wrap">
+        <table class="rank-table">
+          <thead>
+            <tr>
+              <th class="col-rank"><button type="button" class="sortbtn is-active" data-sort="rank" data-dir="asc">#<span class="caret"></span></button></th>
+              <th class="col-name"><button type="button" class="sortbtn" data-sort="name" data-dir="asc">Settlement<span class="caret"></span></button></th>
+              <th class="col-num"><button type="button" class="sortbtn" data-sort="silenceHours" data-dir="desc" title="Hours since last confirming report">Silent<span class="caret"></span></button></th>
+              <th class="col-num"><button type="button" class="sortbtn" data-sort="giZScore" data-dir="desc" title="Getis-Ord Gi* z-score">Gi*&nbsp;z<span class="caret"></span></button></th>
+              <th class="col-num"><button type="button" class="sortbtn" data-sort="corroborationCount" data-dir="desc" title="Independent corroborating reports">Corr<span class="caret"></span></button></th>
+            </tr>
+          </thead>
+          <tbody id="rank-body">
+            <tr class="empty-row"><td colspan="5">No ranking yet — run the pipeline.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="rail-block rail-block--log">
+      <header class="rail-head">
+        <h2>Activity</h2>
+        <span class="rail-sub" id="activity-sub">agent trace</span>
+      </header>
+      <ol class="activity" id="activity" aria-live="polite" aria-relevant="additions">
+        <li class="activity-empty">Waiting for the first pipeline pass…</li>
+      </ol>
+    </section>
+
+  </aside>
+</main>
+
+<!-- ══════════════ FAILURE FEED (persistent) ══════════════ -->
+<footer class="failfeed" aria-label="Incident feed">
+  <div class="failfeed-head">
+    <span class="ff-title">FAIL&nbsp;FEED</span>
+    <span class="ff-count" id="ff-count">0</span>
+    <span class="ff-hint">real failure branches — degraded connectors, LLM fallback, cold start</span>
+  </div>
+  <div class="failfeed-strip" id="failfeed" aria-live="polite">
+    <div class="ff-empty">No incidents recorded. Failures will appear here as they happen.</div>
+  </div>
+</footer>
+
+<!-- ══════════════ EVIDENCE DRAWER ══════════════ -->
+<div class="drawer-scrim" id="drawer-scrim" hidden></div>
+<section class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title" hidden>
+  <header class="drawer-head">
+    <div>
+      <p class="drawer-kicker" id="drawer-kicker">EVIDENCE TRAIL</p>
+      <h2 id="drawer-title">—</h2>
+      <p class="drawer-meta" id="drawer-meta"></p>
+    </div>
+    <button class="iconbtn" id="drawer-close" type="button" aria-label="Close evidence drawer">✕</button>
+  </header>
+  <div class="drawer-body" id="drawer-body"></div>
+</section>
+
+<!-- ══════════════ HUMAN CHECKPOINT ══════════════ -->
+<!-- Persistent, non-dismissible bar. Only disappears when nothing is pending. -->
+<button class="checkpoint-bar" id="checkpoint-bar" type="button" hidden>
+  <span class="cp-bar-pulse" aria-hidden="true"></span>
+  <strong id="cp-bar-count">0 decisions</strong>
+  <span>awaiting a named human. Nothing becomes actionable until one of them signs.</span>
+  <span class="cp-bar-cta">Review →</span>
+</button>
+
+<div class="cp-scrim" id="cp-scrim" hidden>
+  <section class="cp-modal" id="cp-modal" role="dialog" aria-modal="true" aria-labelledby="cp-title">
+    <header class="cp-head">
+      <div>
+        <p class="cp-kicker">HUMAN CHECKPOINT</p>
+        <h2 id="cp-title">Decisions held pending</h2>
+        <p class="cp-sub">Signal Zero never issues a dispatch instruction. Approval unlocks a <em>sorted candidate list</em> — never an assignment.</p>
+      </div>
+      <button class="iconbtn" id="cp-minimize" type="button" aria-label="Minimize — items stay pending">Minimize</button>
+    </header>
+    <div class="cp-body" id="cp-body"></div>
+    <footer class="cp-foot" id="cp-foot"></footer>
+  </section>
+</div>
+
+<div class="toast-wrap" id="toasts" aria-live="assertive"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="app.js"></script>
+</body>
+</html>
