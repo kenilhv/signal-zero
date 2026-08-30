@@ -116,13 +116,40 @@ const HAZARD_WORDS = [
   'river rose', 'rising river', 'cloudburst', 'washed away', 'swept away'
 ];
 
-const STATUS_WORDS = [
-  'reached', 'contacted', 'reached by', 'residents', 'villagers', 'households',
-  'houses', 'homes', 'casualt', 'injur', 'dead', 'death', 'missing',
+// Concrete, on-the-ground observation. Only these can turn a report into a
+// corroboration - i.e. positive evidence that somebody actually looked.
+const STRONG_STATUS_WORDS = [
+  'reached', 'contacted', 'casualt', 'injur', 'dead', 'death', 'missing',
   'rescue', 'relief', 'shelter', 'displaced', 'damaged', 'destroyed',
-  'bridge', 'road blocked', 'cut off', 'confirmed', 'ward', 'families',
-  'search team', 'helicopter', 'security personnel', 'police post',
-  'health post', 'no casualties', 'accounted for', 'safe'
+  'swept', 'washed away', 'cut off', 'households', 'houses', 'homes',
+  'search team', 'helicopter', 'security personnel', 'health post',
+  'no casualties', 'road blocked', 'distributed'
+];
+
+// Suggestive but not sufficient on its own. Two of these with no warning
+// framing count as corroboration; one does not.
+const WEAK_STATUS_WORDS = [
+  'residents', 'villagers', 'families', 'bridge', 'ward', 'confirmed',
+  'police post', 'local unit'
+];
+
+const STATUS_WORDS = [...STRONG_STATUS_WORDS, ...WEAK_STATUS_WORDS];
+
+// Forward-looking framing: this report is telling people what MIGHT happen,
+// not reporting what did. A warning is never a corroboration.
+const WARNING_WORDS = [
+  'warned', 'warning', 'alert', 'advisory', 'forecast', 'siren', 'issued',
+  'expected to', 'may rise', 'could rise', 'on standby', 'preparedness'
+];
+
+// Explicit statements that nobody has heard from a place. Signal Zero exists
+// precisely because these are the OPPOSITE of a corroboration - treating them
+// as confirmation would mark a silent settlement as covered.
+const NEGATIVE_CONTACT_WORDS = [
+  'no contact', 'not been reached', 'yet to be reached', 'unreachable',
+  'unaccounted', 'no word', 'no communication', 'cannot be reached',
+  'could not be reached', 'lost contact', 'no information', 'still silent',
+  'no response'
 ];
 
 const NOISE_WORDS = [
@@ -223,10 +250,16 @@ function buildIndex(settlements) {
 function classifyCategory(report, normalized, settlementId, unknownPlace) {
   const hazard = countHits(normalized, HAZARD_WORDS);
   const status = countHits(normalized, STATUS_WORDS);
+  const strong = countHits(normalized, STRONG_STATUS_WORDS);
+  const weak = countHits(normalized, WEAK_STATUS_WORDS);
+  const warning = countHits(normalized, WARNING_WORDS);
+  const negative = countHits(normalized, NEGATIVE_CONTACT_WORDS);
   const noise = countHits(normalized, NOISE_WORDS);
   const signals = {
     hazardHits: hazard.hits.slice(0, 6),
     statusHits: status.hits.slice(0, 6),
+    warningHits: warning.hits.slice(0, 4),
+    negativeContactHits: negative.hits.slice(0, 4),
     noiseHits: noise.hits.slice(0, 4),
     unknownPlace: unknownPlace || null
   };
@@ -241,13 +274,24 @@ function classifyCategory(report, normalized, settlementId, unknownPlace) {
     return { category: 'new-settlement', strength: 0.8, signals };
   }
 
+  // A report that says nobody has heard from a place is the exact inverse of a
+  // corroboration. It must never be allowed to mark that place as covered.
+  const corroborationVetoed = negative.n > 0 || (warning.n > 0 && strong.n === 0);
+
   // A resolved settlement plus concrete on-the-ground status = the thing that
   // can CONFIRM a settlement is not silent. Official sources are stronger.
-  if (settlementId && status.n > 0) {
+  const hasRealStatus = strong.n > 0 || (weak.n >= 2 && warning.n === 0);
+  if (settlementId && hasRealStatus && !corroborationVetoed) {
     const official = report.sourceType === 'official';
     const social = report.sourceType === 'social';
     const strength = official ? 0.95 : social ? 0.78 : 0.88;
     return { category: 'corroboration-candidate', strength, signals };
+  }
+
+  // An explicit "nobody has heard from X" is a hazard signal about X, and it is
+  // the single most valuable input this system takes.
+  if (negative.n > 0) {
+    return { category: 'hazard-signal', strength: settlementId ? 0.9 : 0.7, signals };
   }
 
   // Hazard talk without settlement-level status: forecasts, warnings, upstream

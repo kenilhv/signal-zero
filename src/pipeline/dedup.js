@@ -75,8 +75,16 @@ const MU = {
   geo: {
     // levels: same settlement / adjacent on the river corridor / far / unknown
     same: { m: 0.88, u: 0.1 },
-    adjacent: { m: 0.08, u: 0.15 },
-    far: { m: 0.02, u: 0.7 },
+    // Adjacent is deliberately EVIDENCE AGAINST a match (m < u). Two towns on
+    // the same corridor being covered in the same news cycle is the normal
+    // case, not a duplicate. Over-merging neighbours would move one town's
+    // corroboration onto the other and hide a genuinely silent settlement -
+    // the exact failure this product exists to prevent.
+    // Pinned so that even a perfect text + time agreement across two adjacent
+    // towns lands in the ambiguous band rather than auto-merging: a human
+    // decides whether that was one event or two.
+    adjacent: { m: 0.04, u: 0.24 },
+    far: { m: 0.06, u: 0.61 },
     unknown: { m: 0.02, u: 0.05 }
   },
   time: {
@@ -103,7 +111,10 @@ const MU = {
 // Prior probability that an arbitrary BLOCKED pair is a true match. Blocking
 // has already thrown away the obvious non-matches, so this is well above the
 // all-pairs base rate but still small.
-const PRIOR_MATCH = 0.05;
+// Calibrated so that the genuinely undecidable comparison vectors - same
+// settlement, a day apart, only moderate wording overlap - actually land in the
+// [0.45, 0.60) band and reach a human, instead of being quietly auto-decided.
+const PRIOR_MATCH = 0.06;
 
 // ---------------------------------------------------------------------------
 // Adjacency (river-corridor graph). Same file the ranking stage uses.
@@ -437,6 +448,9 @@ export function dedup(reports, settlements) {
     .filter(
       (p) => p.matchProbability >= AMBIGUOUS_LOW && p.matchProbability < AMBIGUOUS_HIGH
     )
+    // Sorted most-likely-match first, so a caller that can only surface N
+    // checkpoint items surfaces the N that matter most.
+    .sort((a, b) => b.matchProbability - a.matchProbability)
     .map((p) => decoratePair(p, list));
 
   // --- cluster ------------------------------------------------------------
@@ -632,6 +646,15 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     'match probability is monotone in agreement'
   );
 
+  // The band must be reachable by realistic comparison vectors, or the Human
+  // Checkpoint would only ever see synthetic cases.
+  const borderline = fellegiSunter({ geo: 'same', time: 'lt24h', text: 'med', source: 'diff' });
+  assert(
+    borderline.matchProbability >= AMBIGUOUS_LOW &&
+      borderline.matchProbability < AMBIGUOUS_HIGH,
+    `same town / a day apart / moderate overlap is undecidable (${borderline.matchProbability})`
+  );
+
   // Two outlets, same town, same hour, near-identical wording => one cluster.
   const dupA = mk(
     'a1', 'np-nuwakot-betrawati', '2026-08-26T09:00:00Z', 'news', 'Kathmandu Post',
@@ -672,6 +695,34 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     clusters.every((c) => c.reportIds.length >= 1),
     'refinement never returns an empty cluster'
   );
+
+  // The badly-connected-community case Louvain/components get wrong: two dense
+  // triangles fused by one flimsy 0.62 edge. Refinement must cut it.
+  const e = (aId, bId, matchProbability) => ({ aId, bId, matchProbability });
+  const badly = refineComponent(
+    ['x1', 'x2', 'x3', 'y1', 'y2', 'y3'],
+    [
+      e('x1', 'x2', 0.97), e('x2', 'x3', 0.95), e('x1', 'x3', 0.96),
+      e('y1', 'y2', 0.98), e('y2', 'y3', 0.94), e('y1', 'y3', 0.93),
+      e('x3', 'y1', 0.62) // the flimsy bridge
+    ]
+  );
+  assert(badly.length === 2, `weak bridge between two dense groups is cut (got ${badly.length} parts)`);
+  assert(
+    badly.every((part) => part.length === 3),
+    'both sides of the cut survive intact'
+  );
+
+  // A strongly-bridged component must NOT be split - refinement is surgical.
+  const healthy = refineComponent(
+    ['x1', 'x2', 'x3', 'y1', 'y2', 'y3'],
+    [
+      e('x1', 'x2', 0.97), e('x2', 'x3', 0.95), e('x1', 'x3', 0.96),
+      e('y1', 'y2', 0.98), e('y2', 'y3', 0.94), e('y1', 'y3', 0.93),
+      e('x3', 'y1', 0.93)
+    ]
+  );
+  assert(healthy.length === 1, 'a strong bridge is left alone');
 
   // Nothing in the corpus should be silently auto-decided inside the band.
   assert(

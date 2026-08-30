@@ -53,22 +53,91 @@ try {
 
 // --- tunables, all documented -----------------------------------------------
 
-/** Documented prior when we have literally no observed gaps anywhere. 12h is
- *  the rough daily news/relief-report cadence for a Nepali district in a
- *  declared emergency: roughly two situation updates per day. */
+/** Expected hours between confirming reports for the REFERENCE cohort:
+ *  hazard tier 2, population 10,000. 12h = roughly two confirmations a day,
+ *  which is the observed cadence of official situation reporting in a declared
+ *  Nepali emergency (NDRRMA / district DDMC sitreps run daily to twice daily)
+ *  plus intermittent news coverage. Everything else is scaled off this anchor. */
 export const PRIOR_EXPECTED_GAP_HOURS = 12;
+export const PRIOR_REFERENCE_POPULATION = 10000;
+export const PRIOR_REFERENCE_TIER = 2;
 
-/** A cohort needs at least this many observed gaps before we trust its own MLE
- *  rather than borrowing the global one. Below ~3 the exponential MLE is wildly
- *  unstable (its relative standard error is 1/sqrt(n)). */
+/** How the prior cadence scales with settlement size. Media and relief-reporting
+ *  attention grows with population but far slower than linearly, so we use a
+ *  square-root (exponent 0.5) scaling: a 40,000-person municipality is expected
+ *  to be heard from twice as often as a 10,000-person town, not four times.
+ *  This is a deliberately conservative sublinear choice - it keeps the prior
+ *  from claiming implausible cadences for the two large towns in the corridor. */
+export const PRIOR_POPULATION_EXPONENT = 0.5;
+
+/** How the prior cadence scales with hazard tier. Tier 3 sits directly on the
+ *  Trishuli/Bhote Koshi flood path and therefore draws more coverage and more
+ *  official attention than an upland tier-1 settlement off the corridor.
+ *  Multipliers are relative to the reference tier 2 and stay inside one
+ *  doubling end to end - hazard exposure changes how often we EXPECT to hear
+ *  from a place; it is not an importance weight bolted onto the score. */
+export const PRIOR_TIER_MULTIPLIER = { 1: 0.7, 2: 1.0, 3: 1.4 };
+
+/** Hard, defensible bounds on the fitted rate. NOTHING may leave the estimator
+ *  outside this range.
+ *
+ *   upper 1/2 per hour  - one INDEPENDENT confirming report every two hours is
+ *                         the fastest sustained cadence any single settlement in
+ *                         this corridor can plausibly produce. Anything faster
+ *                         is duplicate coverage of one event (which is dedup's
+ *                         job to collapse) or an ingest-window artefact, not a
+ *                         reporting rate. This bound is what stops the old
+ *                         lambda=60/hour ("60 reports an hour from a rural
+ *                         Nepali village") from ever being emitted again.
+ *   lower 1/72 per hour - if we would not expect to hear from a place more than
+ *                         once every three days, its silence over a four-day
+ *                         window carries no evidential weight and surprisal
+ *                         would collapse toward zero. We clamp instead, and
+ *                         coverageBasis keeps saying the number is borrowed. */
+export const LAMBDA_MAX_PER_HOUR = 1 / 2;
+export const LAMBDA_MIN_PER_HOUR = 1 / 72;
+
+/** Strength of the prior, expressed in pseudo-observations (Gamma-Exponential
+ *  conjugacy: a Gamma(alpha, beta) prior on lambda behaves exactly like alpha
+ *  previously observed gaps totalling beta hours). 3 pseudo-gaps means the
+ *  prior is worth about as much as the smallest cohort sample we would trust on
+ *  its own, so a cohort with 20 real gaps is data-dominated while a cohort with
+ *  one gap barely moves off the prior. */
+export const PRIOR_STRENGTH_GAPS = 3;
+
+/** A cohort with at least this many observed gaps is reported as fitBasis
+ *  'cohort'; below it the posterior is dominated by the pooled corridor-wide
+ *  level and we say 'global'. The exponential MLE's relative standard error is
+ *  1/sqrt(n), so below ~3 an unshrunk cohort fit is meaningless. */
 export const MIN_COHORT_GAPS = 3;
 
-/** Gaps are clamped to at least one minute so a duplicate timestamp cannot
- *  drive sum(gaps) to zero and make lambda infinite. */
+/** Two reports about the same settlement closer together than this are ONE
+ *  reporting event, not two independent confirmations: wire copy propagates
+ *  across outlets in minutes, and a scraped item with no publication date is
+ *  stamped with the scrape instant, so a whole ingest batch can land on one
+ *  identical timestamp. Collapsing them is what keeps the inter-event gaps a
+ *  measure of reporting CADENCE rather than of scraper throughput. */
+export const MIN_DISTINCT_EVENT_HOURS = 0.5;
+
+/** Floor on an individual gap, kept only as a divide-by-zero guard. After event
+ *  coalescing no surviving gap can be smaller than MIN_DISTINCT_EVENT_HOURS. */
 const MIN_GAP_HOURS = 1 / 60;
 
 /** Two-sided 95% normal critical value. Standard Gi* significance threshold. */
 export const Z_CRITICAL = 1.96;
+
+// --- escalation gate (see qualifiesForEscalation) ---------------------------
+
+/** Minimum self-information, in nats, before a silence may be put in front of a
+ *  human. 3.0 nats == P(gap >= observed) = e^-3 ~= 0.05, i.e. the same 5% tail
+ *  the Gi* Z_CRITICAL uses spatially. Because surprisal = lambda * silence, this
+ *  is also the statement "silent for at least three times its own expected gap". */
+export const ESCALATION_MIN_SURPRISAL_NATS = 3.0;
+
+/** Absolute floor on wall-clock silence, independent of any fitted rate. No
+ *  settlement we heard from within the last quarter of a day may ever be
+ *  described as anomalously silent, however extreme its neighbourhood looks. */
+export const ESCALATION_MIN_SILENCE_HOURS = 6;
 
 /** Do not spam the fail feed: only the first few cold starts are logged. */
 const MAX_COLD_START_INCIDENTS = 3;
@@ -128,19 +197,115 @@ export function cohortKeyFor(settlement) {
  *   log-likelihood  L = n*ln(lambda) - lambda*sum(t)
  *   dL/dlambda = 0  =>  lambda_hat = n / sum(t)
  * Returns null when there is nothing to fit.
+ *
+ * `minGap` guards against a zero-length sum; it defaults to one minute for gaps
+ * measured in hours, and callers fitting DIMENSIONLESS rescaled gaps pass their
+ * own floor.
  */
-export function fitExponentialRate(gaps) {
+export function fitExponentialRate(gaps, minGap = MIN_GAP_HOURS) {
   const clean = [];
   for (const g of gaps || []) {
     // strictly numeric: null/''/booleans must not silently coerce to a 0h gap
     const v = typeof g === 'number' ? g : Number.NaN;
     if (!Number.isFinite(v) || v < 0) continue;
-    clean.push(Math.max(v, MIN_GAP_HOURS));
+    clean.push(Math.max(v, minGap));
   }
   if (clean.length === 0) return null;
   const total = clean.reduce((a, b) => a + b, 0);
   if (total <= EPS) return null;
   return clean.length / total; // lambda_hat = n / sum(gaps)
+}
+
+/**
+ * PRIOR reporting rate for a settlement profile, in reports per hour.
+ *
+ *   lambda0 = (1 / PRIOR_EXPECTED_GAP_HOURS)
+ *             * (population / PRIOR_REFERENCE_POPULATION) ^ PRIOR_POPULATION_EXPONENT
+ *             * PRIOR_TIER_MULTIPLIER[tier] / PRIOR_TIER_MULTIPLIER[reference tier]
+ *
+ * This is the number the whole product's credibility rests on, so it is built
+ * from stated, checkable assumptions rather than from whatever the scraper
+ * happened to return in one ingest window:
+ *
+ *   - the anchor (12h for a tier-2 town of 10,000) is the observed cadence of
+ *     emergency situation reporting in Nepal, not a fitted quantity;
+ *   - population scales it sublinearly (sqrt), because coverage attention grows
+ *     with size much more slowly than size does;
+ *   - hazard tier scales it modestly, because a settlement on the flood path is
+ *     genuinely reported on more often than one off it.
+ *
+ * Crucially the prior VARIES ACROSS COHORTS. That variation is what lets the
+ * ranking discriminate between settlements that have all been silent for the
+ * same wall-clock time: 96h of silence from a tier-3 town where we expect to
+ * hear something every ~10h is a far stronger statement than 96h from a tier-1
+ * hamlet where the expectation is ~2 days.
+ *
+ * Always inside [LAMBDA_MIN_PER_HOUR, LAMBDA_MAX_PER_HOUR].
+ */
+export function priorRatePerHour(hazardTier, population) {
+  const tier = Number(hazardTier) || PRIOR_REFERENCE_TIER;
+  const pop = Math.max(1, Number(population) || PRIOR_REFERENCE_POPULATION);
+  const tierMult =
+    (PRIOR_TIER_MULTIPLIER[tier] ?? PRIOR_TIER_MULTIPLIER[PRIOR_REFERENCE_TIER]) /
+    PRIOR_TIER_MULTIPLIER[PRIOR_REFERENCE_TIER];
+  const popMult = (pop / PRIOR_REFERENCE_POPULATION) ** PRIOR_POPULATION_EXPONENT;
+  return clampRate((1 / PRIOR_EXPECTED_GAP_HOURS) * popMult * tierMult);
+}
+
+/** Every rate the estimator emits passes through here. No exceptions. */
+export function clampRate(lambda) {
+  if (!Number.isFinite(lambda) || lambda <= 0) return LAMBDA_MIN_PER_HOUR;
+  return Math.min(LAMBDA_MAX_PER_HOUR, Math.max(LAMBDA_MIN_PER_HOUR, lambda));
+}
+
+/**
+ * Posterior mean of a Gamma-Exponential update, expressed as a multiplicative
+ * FACTOR on a prior rate rather than as a rate.
+ *
+ * Model: gaps t_i ~ Exp(k * lambda0_i), where lambda0_i is the structural prior
+ * for the cohort that produced gap i and k is one shared "how noisy is this
+ * emergency, really" factor. Rescaling u_i = lambda0_i * t_i makes every gap
+ * comparable, and u_i ~ Exp(k), so with a Gamma(a, a/kPrior) prior on k:
+ *
+ *   k_posterior_mean = (a + n) / (a / kPrior + sum(u_i))
+ *
+ * n = 0 returns kPrior exactly, which is the behaviour we want for cohorts with
+ * no observations: fall back cleanly, do not invent a rate.
+ */
+export function posteriorScaleFactor(rescaledGaps, kPrior = 1, strength = PRIOR_STRENGTH_GAPS) {
+  let n = 0;
+  let sum = 0;
+  for (const u of rescaledGaps || []) {
+    if (!Number.isFinite(u) || u < 0) continue;
+    n += 1;
+    sum += u;
+  }
+  const prior = Number.isFinite(kPrior) && kPrior > 0 ? kPrior : 1;
+  return (strength + n) / (strength / prior + sum);
+}
+
+/**
+ * Collapse a settlement's report timestamps into DISTINCT reporting events.
+ *
+ * Two things are folded away here, and both were actively corrupting the rate
+ * estimate before:
+ *   1. dedup clusters - every report in one cluster is one real-world event, so
+ *      the cluster contributes its earliest timestamp and nothing more;
+ *   2. near-simultaneous arrivals - anything within MIN_DISTINCT_EVENT_HOURS of
+ *      the previous kept event is the same event reaching us again (syndicated
+ *      copy, or a scraped item with no publication date whose timestamp is just
+ *      the scrape instant).
+ *
+ * Input times must be in milliseconds; output is sorted ascending.
+ */
+export function coalesceEventTimes(timesMs, minSeparationHours = MIN_DISTINCT_EVENT_HOURS) {
+  const sorted = [...(timesMs || [])].filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  const kept = [];
+  const minSepMs = Math.max(0, minSeparationHours) * HOUR_MS;
+  for (const t of sorted) {
+    if (kept.length === 0 || t - kept[kept.length - 1] >= minSepMs) kept.push(t);
+  }
+  return kept;
 }
 
 /**
@@ -245,6 +410,61 @@ export function getisOrdGiStar(ids, xById, adjacency) {
   return out;
 }
 
+// --- escalation gate --------------------------------------------------------
+
+/**
+ * May this ranked row be put in front of a human as "anomalous silence"?
+ *
+ * THE OLD RULE WAS isLocalAnomaly ALONE, AND IT WAS WRONG IN BOTH DIRECTIONS.
+ *
+ * Too loose: Gi* is a NEIGHBOURHOOD statistic. A settlement that reported ten
+ * minutes ago still clears the critical value whenever the stretch of corridor
+ * around it has gone dark. rank() already names that case 'cluster-edge' -
+ * context about the neighbours, not a claim about this settlement - yet the
+ * checkpoint escalated it anyway, producing items such as "Anomalous silence:
+ * Nilkantha (Dhading) - 0h with no confirming report" for a settlement holding
+ * two fresh reports and silenceHours = 0.
+ *
+ * Too tight: Gi* measures how much a place stands out from its neighbours, so
+ * it collapses toward zero in the single most serious scenario this product
+ * exists for - a WIDE outage where most of the corridor has gone quiet at once.
+ * Requiring spatial significance would silently suppress every escalation
+ * exactly when everything is dark.
+ *
+ * The evidence that a place is anomalously silent is therefore TEMPORAL, and it
+ * is about the settlement itself. All three conditions must hold:
+ *
+ *   1. silenceHours >= ESCALATION_MIN_SILENCE_HOURS
+ *        An absolute wall-clock floor that survives any error in the fitted
+ *        cadence. We never call a place silent if we heard from it this morning.
+ *   2. surprisal >= ESCALATION_MIN_SURPRISAL_NATS
+ *        Its own silence is a <=5% wait under its own fitted rate - equivalently
+ *        (surprisal = lambda * silence) it has been quiet for at least three
+ *        times its expected gap. This is the actual anomaly claim.
+ *   3. ownZScore > 0
+ *        It is above the corridor-wide mean silence. Keeps us from escalating a
+ *        comparatively well-covered settlement merely because the whole
+ *        corridor is slow, and independently excludes every cluster-edge row.
+ *
+ * Gi*, isLocalAnomaly and anomalyType remain in the row and in the escalation's
+ * evidence as SUPPORTING CONTEXT for the human reading it - is this one place,
+ * or is this the whole valley - but they no longer gate the decision.
+ */
+export function qualifiesForEscalation(row) {
+  if (!row) return false;
+  const silence = Number(row.silenceHours);
+  const surprisal = Number(row.surprisal);
+  const ownZ = Number(row.ownZScore);
+  if (!Number.isFinite(silence) || !Number.isFinite(surprisal) || !Number.isFinite(ownZ)) {
+    return false;
+  }
+  return (
+    silence >= ESCALATION_MIN_SILENCE_HOURS &&
+    surprisal >= ESCALATION_MIN_SURPRISAL_NATS &&
+    ownZ > 0
+  );
+}
+
 // --- cluster / corroboration plumbing --------------------------------------
 
 /** Dedup may hand us several plausible cluster shapes; be liberal about it. */
@@ -317,43 +537,121 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
     clustersBySettlement.get(sid).add(c.id ?? clusterReportIds(c).join('+'));
   }
 
-  // ---- STEP A.1: gather inter-report gaps per cohort ------------------------
-  const cohortGaps = new Map();
-  const globalGaps = [];
+  // ---- STEP A.0: structural prior per cohort -------------------------------
+  // The cohort is (hazard tier, population bucket), so its representative size
+  // is the GEOMETRIC mean of its members' populations - geometric because the
+  // prior scales as a power law in population, and the geometric mean is the
+  // value that makes the scaled prior unbiased in log space.
+  const cohortMembers = new Map();
+  for (const s of list) {
+    const key = cohortKeyFor(s);
+    if (!cohortMembers.has(key)) cohortMembers.set(key, []);
+    cohortMembers.get(key).push(s);
+  }
+  const cohortPrior = new Map(); // cohortKey -> lambda0 (reports per hour)
+  for (const [key, members] of cohortMembers) {
+    const tier = Number(members[0]?.hazardTier) || PRIOR_REFERENCE_TIER;
+    let logSum = 0;
+    let counted = 0;
+    for (const m of members) {
+      const p = Number(m.population);
+      if (Number.isFinite(p) && p > 0) {
+        logSum += Math.log(p);
+        counted += 1;
+      }
+    }
+    const representativePop = counted
+      ? Math.exp(logSum / counted)
+      : PRIOR_REFERENCE_POPULATION;
+    cohortPrior.set(key, priorRatePerHour(tier, representativePop));
+  }
+  const priorFor = (key) => cohortPrior.get(key) ?? 1 / PRIOR_EXPECTED_GAP_HOURS;
+
+  // ---- STEP A.1: gather inter-EVENT gaps per cohort -------------------------
+  // Gaps are measured between DISTINCT reporting events (dedup clusters, then
+  // near-simultaneous arrivals coalesced), never between raw scraped reports.
+  // Fitting raw reports measured the scraper's throughput inside one ingest
+  // window instead of the settlement's reporting cadence: when Bright Data
+  // returns items with no publication date, ingest stamps them all with the
+  // scrape instant, every gap collapses to zero, and lambda pins to the
+  // divide-by-zero floor (that is exactly how lambda = 60/hour, i.e. one report
+  // per minute from a rural village, reached the live dashboard).
+  //
+  // Gaps are stored RESCALED by their own cohort's prior rate (u = lambda0 * t,
+  // in units of "expected gaps"), so observations from cohorts with different
+  // expected cadences can legitimately be pooled into one level estimate.
+  const clusterIdByReport = new Map();
+  for (const c of allClusters) {
+    const cid = c.id ?? clusterReportIds(c).join('+');
+    for (const rid of clusterReportIds(c)) if (rid) clusterIdByReport.set(rid, cid);
+  }
+
+  const eventTimesBySettlement = new Map();
+  for (const r of allReports) {
+    const sid = r.settlementId;
+    if (!sid) continue;
+    const t = reportTimeMs(r);
+    if (t === null) continue;
+    const eventKey = clusterIdByReport.get(r.id) ?? r.clusterId ?? `report:${r.id ?? t}`;
+    if (!eventTimesBySettlement.has(sid)) eventTimesBySettlement.set(sid, new Map());
+    const byEvent = eventTimesBySettlement.get(sid);
+    // one event contributes the moment it FIRST reached us
+    const prev = byEvent.get(eventKey);
+    if (prev === undefined || t < prev) byEvent.set(eventKey, t);
+  }
+
+  const cohortRescaled = new Map(); // cohortKey -> number[] of u = lambda0 * gap
+  const globalRescaled = [];
 
   for (const s of list) {
-    const times = timesBySettlement.get(s.id) || [];
-    if (times.length < 2) continue; // need >= 2 reports to observe a gap
+    const byEvent = eventTimesBySettlement.get(s.id);
+    if (!byEvent) continue;
+    const events = coalesceEventTimes([...byEvent.values()]);
+    if (events.length < 2) continue; // need >= 2 distinct events to observe a gap
     const key = cohortKeyFor(s);
-    if (!cohortGaps.has(key)) cohortGaps.set(key, []);
-    const bucket = cohortGaps.get(key);
-    for (let i = 1; i < times.length; i++) {
-      const gapHours = (times[i] - times[i - 1]) / HOUR_MS;
-      if (!Number.isFinite(gapHours) || gapHours < 0) continue;
-      bucket.push(gapHours);
-      globalGaps.push(gapHours);
+    const lambda0 = priorFor(key);
+    if (!cohortRescaled.has(key)) cohortRescaled.set(key, []);
+    const bucket = cohortRescaled.get(key);
+    for (let i = 1; i < events.length; i++) {
+      const gapHours = (events[i] - events[i - 1]) / HOUR_MS;
+      if (!Number.isFinite(gapHours) || gapHours <= 0) continue;
+      const u = lambda0 * gapHours;
+      bucket.push(u);
+      globalRescaled.push(u);
     }
   }
 
-  // ---- STEP A.2: fit lambda per cohort, with documented fallbacks ----------
-  const globalLambda = fitExponentialRate(globalGaps); // may be null
-  const cohortLambda = new Map();
-  for (const [key, gaps] of cohortGaps) {
-    if (gaps.length < MIN_COHORT_GAPS) continue;
-    const lambda = fitExponentialRate(gaps);
-    if (lambda) cohortLambda.set(key, { lambda, gapCount: gaps.length });
+  // ---- STEP A.2: Gamma-Exponential posterior, per cohort -------------------
+  // Two levels, both shrunk toward a stated prior:
+  //   k_global - how much faster or slower the corridor as a whole is reporting
+  //              than the structural prior expects (prior mean 1: "the stated
+  //              assumptions are right"). Estimated from every observed gap.
+  //   k_cohort - the same factor for one cohort, shrunk toward k_global rather
+  //              than toward 1, so a cohort with few gaps inherits the corridor
+  //              level instead of inventing its own.
+  // lambda(cohort) = clamp(k_cohort * lambda0(cohort)). With no observed gaps
+  // anywhere this reduces exactly to the structural prior.
+  const kGlobal = posteriorScaleFactor(globalRescaled, 1);
+  const cohortRate = new Map();
+  for (const [key, lambda0] of cohortPrior) {
+    const rescaled = cohortRescaled.get(key) || [];
+    const k = posteriorScaleFactor(rescaled, kGlobal);
+    cohortRate.set(key, { lambda: clampRate(k * lambda0), gapCount: rescaled.length });
   }
 
   function rateFor(cohortKey) {
-    const fitted = cohortLambda.get(cohortKey);
-    if (fitted) {
-      return { lambda: fitted.lambda, fitBasis: 'cohort', sampleGaps: fitted.gapCount };
+    const fitted = cohortRate.get(cohortKey);
+    const lambda = fitted ? fitted.lambda : clampRate(priorFor(cohortKey));
+    const gapCount = fitted ? fitted.gapCount : 0;
+    // fitBasis is an honesty label, not a switch: it says WHERE the evidence
+    // behind this rate came from.
+    if (globalRescaled.length === 0) {
+      return { lambda, fitBasis: 'prior', sampleGaps: 0 };
     }
-    if (globalLambda) {
-      return { lambda: globalLambda, fitBasis: 'global', sampleGaps: globalGaps.length };
+    if (gapCount >= MIN_COHORT_GAPS) {
+      return { lambda, fitBasis: 'cohort', sampleGaps: gapCount };
     }
-    // Documented prior - see PRIOR_EXPECTED_GAP_HOURS.
-    return { lambda: 1 / PRIOR_EXPECTED_GAP_HOURS, fitBasis: 'prior', sampleGaps: 0 };
+    return { lambda, fitBasis: 'global', sampleGaps: globalRescaled.length };
   }
 
   // ---- STEP A.3: silence, expected gap, surprisal --------------------------
@@ -425,7 +723,10 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
       neighborCount: 0,
       isRegionalOutage: false,
       isSoloAnomaly: false,
-      anomalyType: 'none'
+      anomalyType: 'none',
+      // Set in STEP B once Gi* is known. This - NOT isLocalAnomaly - is what may
+      // be put in front of a human. See qualifiesForEscalation().
+      isEscalationCandidate: false
     });
   }
 
@@ -468,6 +769,10 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
           ? (g.ownZ > 0 ? 'silent-cluster' : 'cluster-edge')
           : 'none';
   }
+
+  // Escalation gate. Deliberately evaluated AFTER anomalyType so the rule can
+  // use ownZScore: neighbourhood significance is necessary but never sufficient.
+  for (const row of rows) row.isEscalationCandidate = qualifiesForEscalation(row);
 
   // ---- STEP C: deterministic ordering --------------------------------------
   // Gi* desc, then surprisal desc, then population desc, then id asc so the

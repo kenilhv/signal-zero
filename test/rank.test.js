@@ -15,7 +15,15 @@ import {
   cohortKeyFor,
   populationBucket,
   surprisalFor,
+  priorRatePerHour,
+  coalesceEventTimes,
+  qualifiesForEscalation,
   PRIOR_EXPECTED_GAP_HOURS,
+  PRIOR_STRENGTH_GAPS,
+  LAMBDA_MIN_PER_HOUR,
+  LAMBDA_MAX_PER_HOUR,
+  ESCALATION_MIN_SURPRISAL_NATS,
+  ESCALATION_MIN_SILENCE_HOURS,
   Z_CRITICAL
 } from '../src/pipeline/rank.js';
 import { store } from '../src/store.js';
@@ -144,19 +152,40 @@ test('cohort key combines hazard tier and population bucket', () => {
   assert.equal(cohortKeyFor({ hazardTier: 1, population: 28400 }), 't1|p>20k');
 });
 
-test('cohort fit is recovered end to end (all gaps are 3h => expectedGap 3h)', () => {
+test('cohort fit is recovered end to end, shrunk toward the cohort prior', () => {
+  // 10 settlements x two 3h gaps = 20 observed gaps. The unshrunk MLE would be
+  // exactly 3h; the Gamma-Exponential posterior pulls it a little toward the
+  // cohort's structural prior (12h for tier 2 / 10k people), and with 20 real
+  // gaps against PRIOR_STRENGTH_GAPS=3 pseudo-gaps the data dominates.
+  //
+  //   u_i = lambda0 * 3h = 0.25 each, sum(u) = 5, n = 20
+  //   k_global = (3 + 20) / (3/1 + 5)          = 2.875
+  //   k_cohort = (3 + 20) / (3/2.875 + 5)      = 3.80571...
+  //   lambda   = k_cohort * (1/12)             = 0.317142...  => 3.1532h
   const { settlements, reports, adjacency } = buildField(10, [4]);
   const ranked = rank(settlements, [], reports, NOW, { adjacency, emitIncidents: false });
   const rows = byId(ranked);
 
+  const lambda0 = 1 / PRIOR_EXPECTED_GAP_HOURS; // tier 2, population 10,000
+  const kGlobal = (PRIOR_STRENGTH_GAPS + 20) / (PRIOR_STRENGTH_GAPS / 1 + 20 * lambda0 * 3);
+  const kCohort =
+    (PRIOR_STRENGTH_GAPS + 20) / (PRIOR_STRENGTH_GAPS / kGlobal + 20 * lambda0 * 3);
+  const expectedGap = 1 / (kCohort * lambda0);
+  assert.ok(Math.abs(expectedGap - 3.1532) < 1e-3, `closed form drifted: ${expectedGap}`);
+
   for (const row of ranked) {
     assert.equal(row.fitBasis, 'cohort');
-    assert.ok(Math.abs(row.expectedGapHours - 3) < 1e-6, `expectedGapHours=${row.expectedGapHours}`);
+    assert.ok(
+      Math.abs(row.expectedGapHours - expectedGap) < 1e-3,
+      `expectedGapHours=${row.expectedGapHours}`
+    );
+    // shrinkage moves it off the raw MLE, but only slightly, and never past the prior
+    assert.ok(row.expectedGapHours > 3 && row.expectedGapHours < 3.5);
     assert.equal(row.coverageBasis, 'reports');
   }
-  // surprisal = lambda * silenceHours = (1/3) * hours
-  assert.ok(Math.abs(rows.get('s0').surprisal - 1 / 3) < 1e-3);
-  assert.ok(Math.abs(rows.get('s4').surprisal - 20 / 3) < 1e-3);
+  // surprisal = lambda * silenceHours
+  assert.ok(Math.abs(rows.get('s0').surprisal - 1 / expectedGap) < 1e-3);
+  assert.ok(Math.abs(rows.get('s4').surprisal - 20 / expectedGap) < 1e-3);
 });
 
 test('with no observed gaps anywhere, the documented prior is used', () => {
@@ -189,6 +218,149 @@ test('a settlement with zero reports is flagged cohort-cold-start', () => {
   assert.equal(rows.get('s0').coverageBasis, 'reports');
   assert.ok(store.incidents.some((i) => i.kind === 'cold-start' && i.detail.settlementId === 's3'));
   store.incidents.length = 0;
+});
+
+// --- REGRESSION: implausible cohort baseline (lambda = 60/hour) -------------
+
+test('a burst of same-timestamp reports cannot inflate lambda (regression)', () => {
+  // Live Bright Data items with no publication date are stamped by ingest with
+  // the scrape instant, so a whole batch lands on ONE timestamp. Before the fix
+  // every gap was 0, got floored at one minute, and lambda_hat = n/sum(gaps)
+  // pinned to 60 reports per hour (expectedGapHours 0.0167) for a rural village.
+  const settlements = makeSettlements(6);
+  const burstAt = new Date(NOW_MS - 1 * HOUR).toISOString();
+  const reports = [];
+  for (let i = 0; i < 13; i++) {
+    reports.push({
+      id: `s0-burst-${i}`,
+      sourceType: 'news',
+      sourceName: 'Wire',
+      url: `https://example.invalid/burst/${i}`,
+      title: `burst ${i}`,
+      text: 'burst',
+      publishedAt: burstAt,
+      fetchedAt: burstAt,
+      settlementId: 's0',
+      clusterId: null
+    });
+  }
+  const ranked = rank(settlements, [], reports, NOW, {
+    adjacency: chainAdjacency(settlements.map((s) => s.id)),
+    emitIncidents: false
+  });
+
+  for (const row of ranked) {
+    assert.ok(row.lambdaPerHour <= LAMBDA_MAX_PER_HOUR + 1e-9, `lambda=${row.lambdaPerHour}`);
+    assert.ok(row.lambdaPerHour >= LAMBDA_MIN_PER_HOUR - 1e-9, `lambda=${row.lambdaPerHour}`);
+    assert.ok(row.expectedGapHours >= 2 && row.expectedGapHours <= 72);
+  }
+  // 13 reports at one instant are ONE reporting event, so no gap was observed
+  // anywhere and the structural prior stands untouched.
+  const s0 = byId(ranked).get('s0');
+  assert.equal(s0.fitBasis, 'prior');
+  assert.equal(s0.reportCount, 13);
+  assert.ok(Math.abs(s0.expectedGapHours - PRIOR_EXPECTED_GAP_HOURS) < 1e-6);
+});
+
+test('the fitted rate is always inside the documented bounds', () => {
+  // Even an absurd corpus (one settlement reporting every 30 seconds, another
+  // once a fortnight) must leave the estimator inside [1/72, 1/2] per hour.
+  const settlements = makeSettlements(4);
+  const fast = Array.from({ length: 40 }, (_, i) => i * 0.6); // every 36 minutes
+  const slow = [0, 336, 672]; // every two weeks
+  const reports = [...makeReports('s0', fast), ...makeReports('s1', slow)];
+  const ranked = rank(settlements, [], reports, NOW, {
+    adjacency: chainAdjacency(settlements.map((s) => s.id)),
+    emitIncidents: false
+  });
+  for (const row of ranked) {
+    assert.ok(row.lambdaPerHour >= LAMBDA_MIN_PER_HOUR - 1e-9);
+    assert.ok(row.lambdaPerHour <= LAMBDA_MAX_PER_HOUR + 1e-9);
+  }
+});
+
+test('near-simultaneous reports collapse into one reporting event', () => {
+  const t0 = NOW_MS;
+  const times = [t0, t0, t0 + 60 * 1000, t0 + 90 * 60 * 1000, t0 + 95 * 60 * 1000];
+  assert.deepEqual(coalesceEventTimes(times), [t0, t0 + 90 * 60 * 1000]);
+  assert.deepEqual(coalesceEventTimes([]), []);
+});
+
+test('the structural prior discriminates between cohorts', () => {
+  // A tier-3 town on the flood path is expected to be heard from far more often
+  // than a tier-1 hamlet off it, so identical silence is NOT identical evidence.
+  const townGap = 1 / priorRatePerHour(3, 6870); // Benighat-shaped
+  const hamletGap = 1 / priorRatePerHour(1, 1240); // small upland settlement
+  assert.ok(townGap < hamletGap, `${townGap} should be shorter than ${hamletGap}`);
+  assert.ok(townGap > 2 && townGap < 24, `implausible town cadence: ${townGap}h`);
+  assert.ok(hamletGap > 24 && hamletGap <= 72, `implausible hamlet cadence: ${hamletGap}h`);
+  // the reference cohort reproduces the documented anchor exactly
+  assert.ok(Math.abs(1 / priorRatePerHour(2, 10000) - PRIOR_EXPECTED_GAP_HOURS) < 1e-9);
+});
+
+test('silent settlements do not all collapse to one identical score', async () => {
+  // The saturation failure: every silent settlement pinned at the same extreme
+  // surprisal, leaving the ranking nothing to discriminate on. Real gazetteer,
+  // one report 96h back to open the observation window, nothing since.
+  const { default: gazetteer } = await import('../src/data/gazetteer.json', {
+    with: { type: 'json' }
+  });
+  const opener = makeReports('np-nuwakot-bidur', [96]);
+  const ranked = rank(gazetteer, [], opener, NOW, { emitIncidents: false });
+  const silent = ranked.filter((r) => r.coverageBasis === 'cohort-cold-start');
+
+  assert.ok(silent.length > 20, `expected a wide silent field, got ${silent.length}`);
+  const distinct = new Set(silent.map((r) => r.surprisal.toFixed(3)));
+  assert.ok(distinct.size >= 5, `surprisal saturated: only ${distinct.size} distinct values`);
+
+  const values = silent.map((r) => r.surprisal);
+  const spread = Math.max(...values) / Math.min(...values);
+  assert.ok(spread > 1.5, `surprisal spread too flat: ${spread}`);
+  for (const row of ranked) {
+    assert.ok(row.expectedGapHours >= 2 && row.expectedGapHours <= 72);
+    assert.ok(row.surprisal < 100, `implausible surprisal ${row.surprisal}`);
+  }
+});
+
+// --- REGRESSION: escalation fired on a settlement that was not silent -------
+
+test('a settlement with fresh reports is never an escalation candidate', () => {
+  // Live output raised "Anomalous silence: Nilkantha (Dhading) - 0h with no
+  // confirming report" for a settlement holding two fresh reports, because the
+  // checkpoint gated on isLocalAnomaly - a NEIGHBOURHOOD statistic that a
+  // still-reporting settlement clears whenever the corridor around it is dark.
+  const { settlements, reports, adjacency } = buildField(20, [8, 9, 11, 12]);
+  const rows = byId(rank(settlements, [], reports, NOW, { adjacency, emitIncidents: false }));
+  const edge = rows.get('s10'); // reported an hour ago, wedged between dark stretches
+
+  assert.equal(edge.anomalyType, 'cluster-edge');
+  assert.ok(edge.giZScore > Z_CRITICAL, 'fixture must still clear the Gi* threshold');
+  assert.equal(edge.isLocalAnomaly, true);
+  assert.ok(edge.silenceHours < ESCALATION_MIN_SILENCE_HOURS);
+  assert.equal(edge.isEscalationCandidate, false);
+  assert.equal(qualifiesForEscalation(edge), false);
+});
+
+test('escalation requires real silence AND real surprisal', () => {
+  const base = { silenceHours: 96, surprisal: 9, ownZScore: 1.2, isLocalAnomaly: true };
+  assert.equal(qualifiesForEscalation(base), true);
+  // fails the wall-clock floor
+  assert.equal(qualifiesForEscalation({ ...base, silenceHours: 0 }), false);
+  assert.equal(
+    qualifiesForEscalation({ ...base, silenceHours: ESCALATION_MIN_SILENCE_HOURS - 0.1 }),
+    false
+  );
+  // fails the statistical floor (silent, but not for long relative to its own cadence)
+  assert.equal(
+    qualifiesForEscalation({ ...base, surprisal: ESCALATION_MIN_SURPRISAL_NATS - 0.01 }),
+    false
+  );
+  // below the corridor mean: comparatively well covered, not an anomaly
+  assert.equal(qualifiesForEscalation({ ...base, ownZScore: -0.5 }), false);
+  // a wide outage flattens Gi*; that must NOT suppress the escalation
+  assert.equal(qualifiesForEscalation({ ...base, isLocalAnomaly: false, giZScore: 0.1 }), true);
+  assert.equal(qualifiesForEscalation(null), false);
+  assert.equal(qualifiesForEscalation({}), false);
 });
 
 // --- STEP B: Getis-Ord Gi* --------------------------------------------------

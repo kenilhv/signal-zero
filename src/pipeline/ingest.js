@@ -90,32 +90,33 @@ const CONNECTORS = [
     ]
   },
   {
-    name: 'ReliefWeb Nepal',
+    // Official / humanitarian reporting. These portals (ReliefWeb, BIPAD,
+    // DHM) render their index pages client-side, so scraping the listing HTML
+    // returns navigation chrome only. Reaching them through the SERP zone with
+    // site: filters is both more reliable and cheaper.
+    name: 'Bright Data SERP - official portals',
     sourceType: 'official',
-    kind: 'listing',
-    targets: ['https://reliefweb.int/updates?advanced-search=%28C170%29_%28DT4611%29'],
-    linkPattern: /\/report\/nepal\//i
+    kind: 'serp',
+    targets: [
+      'https://www.google.com/search?q=Trishuli+OR+Rasuwa+flood+site%3Areliefweb.int+OR+site%3Abipadportal.gov.np+OR+site%3Ahydrology.gov.np+OR+site%3Aun.org.np&num=20&hl=en&brd_json=1'
+    ]
   },
   {
-    name: 'BIPAD Portal (NDRRMA)',
-    sourceType: 'official',
-    kind: 'listing',
-    targets: ['https://bipadportal.gov.np/incidents/'],
-    linkPattern: /\/(incidents?|report)\//i
+    name: 'Bright Data SERP - social chatter',
+    sourceType: 'social',
+    kind: 'serp',
+    targets: [
+      'https://www.google.com/search?q=Trishuli+Rasuwa+Nuwakot+flood+site%3Ax.com+OR+site%3Areddit.com&num=20&hl=en&brd_json=1'
+    ]
   },
   {
+    // The one connector that exercises the Web Unlocker + HTML extractor path:
+    // fetch a server-rendered section index, pull article links, fetch each.
     name: 'Kathmandu Post - National',
     sourceType: 'news',
     kind: 'listing',
     targets: ['https://kathmandupost.com/national'],
     linkPattern: /kathmandupost\.com\/[a-z-]+\/20\d\d\/\d\d\/\d\d\//i
-  },
-  {
-    name: 'Onlinekhabar English',
-    sourceType: 'news',
-    kind: 'listing',
-    targets: ['https://english.onlinekhabar.com/category/news'],
-    linkPattern: /english\.onlinekhabar\.com\/[a-z0-9-]+\.html/i
   }
 ];
 
@@ -133,6 +134,40 @@ function isoOrNull(value) {
   if (!value) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+const RELATIVE_UNITS_MS = {
+  second: 1000,
+  minute: 60 * 1000,
+  hour: 3600 * 1000,
+  day: 86400 * 1000,
+  week: 7 * 86400 * 1000,
+  month: 30 * 86400 * 1000,
+  year: 365 * 86400 * 1000
+};
+
+/**
+ * Google SERP results carry relative dates ("3 days ago", "5 hours ago") rather
+ * than timestamps. The whole ranking model is built on time-between-events, so a
+ * report whose publishedAt silently collapses to "now" is worse than useless -
+ * it makes a stale settlement look freshly covered. Parse them properly.
+ */
+function parseLooseDate(value) {
+  if (!value) return null;
+  const s = String(value).trim().toLowerCase();
+
+  const rel = /^(?:about\s+)?(\d+)\s*(second|sec|minute|min|hour|hr|day|week|month|year)s?\s+ago$/.exec(s);
+  if (rel) {
+    const n = Number(rel[1]);
+    const unit =
+      { sec: 'second', min: 'minute', hr: 'hour' }[rel[2]] || rel[2];
+    const ms = RELATIVE_UNITS_MS[unit];
+    if (ms) return new Date(Date.now() - n * ms).toISOString();
+  }
+  if (s === 'yesterday') return new Date(Date.now() - RELATIVE_UNITS_MS.day).toISOString();
+  if (s === 'today' || s === 'just now') return new Date().toISOString();
+
+  return isoOrNull(value);
 }
 
 function readJson(file, fallback) {
@@ -265,7 +300,7 @@ function extractPublishedAt(html) {
     /<meta[^>]+name=["'](?:pubdate|publish-date|date)["'][^>]+content=["']([^"']+)["']/i,
     /<time[^>]+datetime=["']([^"']+)["']/i
   );
-  return isoOrNull(raw);
+  return parseLooseDate(raw);
 }
 
 function extractBodyText(html) {
@@ -344,6 +379,15 @@ function isRelevant(title, text) {
   const hitsEvent = EVENT_KEYWORDS.some((k) => hay.includes(k));
   const hitsPlace = placeNeedles().some((k) => hay.includes(k));
   return hitsEvent || hitsPlace;
+}
+
+/**
+ * Relevance test for an index-page link, where all we have is anchor text plus a
+ * URL slug. No minimum-length gate here - headlines are short by design.
+ */
+function isRelevantLink(label, url) {
+  const hay = `${label} ${url}`.toLowerCase();
+  return EVENT_KEYWORDS.some((k) => hay.includes(k)) || placeNeedles().some((k) => hay.includes(k));
 }
 
 function publisherName(url, fallback) {
@@ -447,7 +491,27 @@ function loadSeedReports() {
 // LIVE mode - one connector at a time, each isolated by try/catch + retries.
 // ---------------------------------------------------------------------------
 
-function parseSerpPayload(body, connector) {
+/**
+ * SERP results frequently carry a RELATIVE link ("/goto?url=CAES..." for a Google
+ * News redirect). Left as-is, that resolves against our own origin, and every
+ * evidence link in the console opens a second copy of the console instead of the
+ * article. Resolve it against the page it was scraped from. Anything that still
+ * is not http(s) after that is dropped rather than shown as a dead citation - an
+ * unverifiable link is worse than no link.
+ */
+function absolutizeUrl(rawUrl, base) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return null;
+  let resolved;
+  try {
+    resolved = base ? new URL(s, base).href : new URL(s).href;
+  } catch {
+    return null;
+  }
+  return /^https?:$/i.test(new URL(resolved).protocol) ? resolved : null;
+}
+
+function parseSerpPayload(body, connector, target) {
   let json;
   try {
     json = JSON.parse(body);
@@ -461,7 +525,7 @@ function parseSerpPayload(body, connector) {
 
   const out = [];
   for (const item of buckets) {
-    const url = item.link || item.url || item.href;
+    const url = absolutizeUrl(item.link || item.url || item.href, target);
     const title = item.title || item.name;
     const text = item.description || item.snippet || item.summary || '';
     if (!url || !title) continue;
@@ -473,7 +537,7 @@ function parseSerpPayload(body, connector) {
         text,
         sourceType: connector.sourceType,
         sourceName: item.source || publisherName(url, connector.name),
-        publishedAt: isoOrNull(item.date || item.published || item.time)
+        publishedAt: parseLooseDate(item.date || item.published || item.time)
       })
     );
   }
@@ -486,7 +550,7 @@ async function runSerpConnector(connector) {
     const body = await withRetry(`${connector.name} :: ${target}`, () =>
       brightDataRequest(target, { zone: SERP_ZONE })
     );
-    reports.push(...parseSerpPayload(body, connector));
+    reports.push(...parseSerpPayload(body, connector, target));
   }
   return reports;
 }
@@ -499,7 +563,7 @@ async function runListingConnector(connector) {
     );
 
     const candidates = extractLinks(listing, target, connector.linkPattern)
-      .filter(({ url, label }) => isRelevant(label, url))
+      .filter(({ url, label }) => isRelevantLink(label, url))
       .slice(0, MAX_ARTICLES_PER_CONNECTOR);
 
     for (const candidate of candidates) {

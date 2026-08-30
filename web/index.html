@@ -1,179 +1,224 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Signal Zero — Coordinator Console</title>
-<meta name="description" content="Signal Zero ranks settlements by anomalous silence, not report volume. Trishuli GLOF response console." />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1015'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23f0a02a' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23f0a02a'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<meta name="description" content="Signal Zero ranks settlements by anomalously long silence, not by report volume. Trishuli GLOF response console." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1015'/%3E%3Ccircle cx='16' cy='16' r='8.5' fill='none' stroke='%23e0a32b' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23e0a32b'/%3E%3C/svg%3E" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
+
+<link rel="stylesheet" href="vendor/maplibre-gl.css" />
 <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body data-layout="wide" data-tab="rank">
 
-<!-- ══════════════ TOP BAR ══════════════ -->
-<header class="topbar" role="banner">
+<a class="skip" href="#region-rank">Skip to rank list</a>
+<a class="skip" href="#region-map">Skip to map</a>
+<a class="skip" href="#region-checkpoint">Skip to checkpoint queue</a>
+
+<!-- ═════════════ A · COMMAND BAR ═════════════ -->
+<header class="cmdbar" role="banner">
   <div class="brand">
-    <div class="brand-mark" aria-hidden="true">
-      <span class="brand-ring"></span><span class="brand-dot"></span>
-    </div>
-    <div class="brand-text">
-      <h1>SIGNAL&nbsp;ZERO</h1>
-      <p>Ranking by <em>silence</em>, not by volume · Trishuli GLOF · Aug 26 2026</p>
-    </div>
+    <span class="brand-mark" aria-hidden="true"><i></i></span>
+    <span class="brand-text">
+      <b>SIGNAL ZERO</b>
+      <small>Ranking by silence, not by volume</small>
+    </span>
   </div>
 
-  <div class="sources" id="sources" aria-label="Source health">
-    <span class="rail-label">SOURCES</span>
-    <div class="chips" id="source-chips"><span class="chip chip--idle">no sources yet</span></div>
+  <span class="scenario" title="Demo scenario">Trishuli GLOF · Rasuwa / Nuwakot / Dhading · 26 Aug 2026</span>
+
+  <div class="rail" id="stage-rail" aria-label="Pipeline progress">
+    <div class="rail-track" id="rail-track"></div>
+    <div class="rail-meta"><span id="rail-sub">Waiting for first state…</span></div>
+    <p class="vh" id="rail-announce" aria-live="polite"></p>
   </div>
 
-  <div class="topbar-actions">
-    <div class="stat-cluster" id="stat-cluster">
-      <div class="stat"><b id="stat-reports">—</b><span>reports</span></div>
-      <div class="stat"><b id="stat-clusters">—</b><span>clusters</span></div>
-      <div class="stat"><b id="stat-lastrun">—</b><span>last run</span></div>
-    </div>
+  <button class="pending-pill" id="pending-pill" type="button" hidden>
+    <span aria-hidden="true">⏸</span> <span id="pending-pill-n">0</span> waiting
+  </button>
 
-    <button id="btn-run" class="btn btn--primary" type="button">
-      <span class="btn-spinner" aria-hidden="true"></span>
-      <span class="btn-label">Run pipeline</span>
-    </button>
-
-    <div class="demo-group" role="group" aria-label="Demo failure injection">
-      <span class="demo-tag">DEMO</span>
-      <button class="btn btn--ghost" type="button" data-fail="source">Break a source</button>
-      <button class="btn btn--ghost" type="button" data-fail="ambiguous">Force ambiguous match</button>
-      <button class="btn btn--ghost" type="button" data-fail="coldstart">Force cold-start</button>
-    </div>
+  <div class="stats" id="stats">
+    <span class="stat"><b id="stat-reports">—</b><small>reports</small></span>
+    <span class="stat stat-clusters"><b id="stat-clusters">—</b><small>clusters</small></span>
+    <span class="stat"><b id="stat-lastrun">—</b><small>last run</small></span>
   </div>
+
+  <button class="btn btn-primary" id="btn-run" type="button">Run pipeline</button>
+
+  <div class="theme-toggle" role="group" aria-label="Colour theme">
+    <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
+    <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+    <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
+  </div>
+
+  <details class="demo" id="demo-menu">
+    <summary aria-label="Demo failures">Demo failures</summary>
+    <div class="demo-body">
+      <p>Simulated faults. Everything they produce is tagged <span class="chip chip-sim">SIMULATED</span>.</p>
+      <button type="button" class="btn btn-ghost" data-fail="source">Break a source</button>
+      <button type="button" class="btn btn-ghost" data-fail="ambiguous">Force ambiguous match</button>
+      <button type="button" class="btn btn-ghost" data-fail="coldstart">Force cold-start</button>
+    </div>
+  </details>
 </header>
 
-<!-- ══════════════ CONNECTION BANNER ══════════════ -->
-<div id="offline-banner" class="offline-banner" role="status" hidden>
-  <span class="dot-pulse" aria-hidden="true"></span>
-  <strong>API unreachable.</strong>
-  <span id="offline-detail">Retrying every 4s — showing last known state.</span>
-</div>
+<div class="api-banner" id="api-banner" role="alert" aria-live="assertive" hidden></div>
 
-<!-- ══════════════ MAIN ══════════════ -->
-<main class="layout">
+<!-- ═════════════ TAB BAR (≤1023px) ═════════════ -->
+<nav class="tabbar" id="tabbar" role="tablist" aria-label="Console regions" hidden>
+  <button role="tab" data-tab="rank"       aria-selected="true"  id="tab-rank">Rank</button>
+  <button role="tab" data-tab="evidence"   aria-selected="false" id="tab-evidence" tabindex="-1">Evidence</button>
+  <button role="tab" data-tab="checkpoint" aria-selected="false" id="tab-checkpoint" tabindex="-1">Checkpoint <span class="tab-badge" id="tab-badge" hidden>0</span></button>
+  <button role="tab" data-tab="activity"   aria-selected="false" id="tab-activity" tabindex="-1">Activity</button>
+  <button role="tab" data-tab="sources"    aria-selected="false" id="tab-sources" tabindex="-1">Sources</button>
+</nav>
 
-  <!-- MAP -->
-  <section class="map-pane" aria-label="Silence map">
-    <div id="map"></div>
+<main class="console">
 
-    <div class="map-legend" aria-hidden="false">
-      <h2>Silence intensity <span class="legend-sub">Getis-Ord Gi* z</span></h2>
-      <div class="ramp"><i style="background:#1c7f74"></i><i style="background:#3f8f6d"></i><i style="background:#8f9351"></i><i style="background:#d99a2b"></i><i style="background:#e2691f"></i><i style="background:#d1341f"></i></div>
-      <div class="ramp-ends"><span>calm / corroborated</span><span>anomalously silent</span></div>
-      <ul class="legend-keys">
-        <li><span class="k k-anom"></span>local anomaly (|z|&nbsp;&gt;&nbsp;1.96) — pulsing ring</li>
-        <li><span class="k k-cold"></span>cold start — <em>no data</em>, not silence</li>
-        <li><span class="k k-edge"></span>river-corridor adjacency</li>
-        <li><span class="k k-size"></span>circle size = population</li>
-      </ul>
-      <p class="legend-note" id="legend-corridor-note"></p>
+  <!-- ═════════════ B · SILENCE RANK ═════════════ -->
+  <section class="region region-rank tabbed" id="region-rank" aria-labelledby="h-rank" data-tab-panel="rank">
+    <header class="region-head">
+      <h2 id="h-rank">Silence Rank <span class="count-pill" id="rank-count">—</span></h2>
+      <div class="filter-row">
+        <div class="seg" role="group" aria-label="Filter by category">
+          <button type="button" data-filt="all" aria-pressed="true">All <b id="f-all">0</b></button>
+          <button type="button" data-filt="anom" aria-pressed="false">Anomalies <b id="f-anom">0</b></button>
+          <button type="button" data-filt="nodata" aria-pressed="false">No data <b id="f-nodata">0</b></button>
+        </div>
+        <label class="vh" for="rank-filter">Filter settlements</label>
+        <input id="rank-filter" type="search" placeholder="Filter settlements…" autocomplete="off" />
+      </div>
+    </header>
+    <div class="region-body" id="rank-body">
+      <table class="rank-table" id="rank-table">
+        <thead>
+          <tr>
+            <th scope="col" class="c-rank"><button type="button" data-sort="rank" aria-sort="ascending" title="Server rank: Gi* desc, then surprisal, then population, then id. Deterministic.">#</button></th>
+            <th scope="col" class="c-name"><button type="button" data-sort="name" aria-sort="none">Settlement</button></th>
+            <th scope="col" class="c-sil"><button type="button" data-sort="silenceHours" aria-sort="none">Silent</button></th>
+            <th scope="col" class="c-gi"><button type="button" data-sort="giZScore" aria-sort="none">Gi* z</button></th>
+            <th scope="col" class="c-corr"><button type="button" data-sort="corroborationCount" aria-sort="none">Corr</button></th>
+          </tr>
+        </thead>
+        <tbody id="rank-rows"></tbody>
+      </table>
+      <div id="rank-empty"></div>
     </div>
-
-    <div class="map-hint" id="map-hint">Click any settlement for its evidence trail.</div>
   </section>
 
-  <!-- RIGHT RAIL -->
-  <aside class="rail" aria-label="Rankings and activity">
+  <div class="col-center">
+    <!-- ═════════════ C · TERRAIN MAP ═════════════ -->
+    <section class="region region-map" id="region-map" aria-labelledby="h-map" aria-describedby="map-desc">
+      <h2 id="h-map" class="vh">Terrain map of the Trishuli corridor</h2>
+      <p id="map-desc" class="vh">A visual map. The same 32 settlements are listed in the Silence Rank table.</p>
 
-    <section class="rail-block rail-block--rank">
-      <header class="rail-head">
-        <h2>Silence Rank</h2>
-        <span class="rail-count" id="rank-count">0</span>
+      <div class="map-canvas" id="map-canvas"></div>
+      <div class="map-markers" id="map-markers"></div>
+
+      <div class="map-tools">
+        <div class="seg seg-map" role="group" aria-label="Basemap">
+          <button type="button" data-basemap="terrain" aria-pressed="true">Terrain</button>
+          <button type="button" data-basemap="street" aria-pressed="false">Street</button>
+          <button type="button" data-basemap="plain" aria-pressed="false">Plain</button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-reset-view" title="Reset view (r)">Reset view</button>
+      </div>
+
+      <div class="map-banner" id="map-banner" hidden></div>
+      <div class="map-status" id="map-status">Loading terrain…</div>
+      <div class="map-tip" id="map-tip" hidden></div>
+
+      <details class="legend" id="legend" open>
+        <summary>Legend</summary>
+        <div class="legend-body">
+          <div class="legend-block">
+            <span class="legend-title">Silence duration</span>
+            <div class="ramp" id="ramp"></div>
+            <div class="ramp-ends"><span>0h</span><span>96h+</span></div>
+            <p class="legend-cap">how long since a report resolved here</p>
+          </div>
+          <div class="legend-block">
+            <span class="legend-title">Anomaly type</span>
+            <ul class="legend-rings" id="legend-rings"></ul>
+          </div>
+          <div class="legend-block legend-block-misc">
+            <span class="legend-title">Also on the map</span>
+            <ul class="legend-misc">
+              <li><span class="sw sw-hatch" aria-hidden="true"></span>hatched = no report has ever reached us (cold start)</li>
+              <li><span class="sw sw-size" aria-hidden="true"></span>marker size = population</li>
+              <li><span class="sw sw-line" aria-hidden="true"></span>river-corridor adjacency (the Gi* graph)</li>
+              <li><span class="sw sw-pause" aria-hidden="true">⏸</span>a human decision is pending here</li>
+            </ul>
+          </div>
+          <p class="legend-foot">Silence = no report reached us. Not a confirmation that a place is quiet.</p>
+        </div>
+      </details>
+
+      <div class="map-attrib" id="map-attrib">© Esri, Maxar, Earthstar Geographics · © OpenStreetMap contributors · Elevation: Mapzen/AWS Terrain Tiles</div>
+    </section>
+
+    <!-- ═════════════ D · EVIDENCE ═════════════ -->
+    <section class="region region-evidence tabbed" id="region-evidence" aria-labelledby="h-evidence" data-tab-panel="evidence">
+      <header class="region-head">
+        <h2 id="h-evidence">Evidence <span id="evidence-subject" class="ev-subject"></span></h2>
+        <div class="head-right">
+          <span id="evidence-basis"></span>
+          <button type="button" class="icon-btn" id="btn-evidence-close" title="Clear selection" aria-label="Clear selection" hidden>✕</button>
+        </div>
       </header>
+      <div class="region-body" id="evidence-body"></div>
+    </section>
+  </div>
 
-      <div class="rank-table-wrap">
-        <table class="rank-table">
-          <thead>
-            <tr>
-              <th class="col-rank"><button type="button" class="sortbtn is-active" data-sort="rank" data-dir="asc">#<span class="caret"></span></button></th>
-              <th class="col-name"><button type="button" class="sortbtn" data-sort="name" data-dir="asc">Settlement<span class="caret"></span></button></th>
-              <th class="col-num"><button type="button" class="sortbtn" data-sort="silenceHours" data-dir="desc" title="Hours since last confirming report">Silent<span class="caret"></span></button></th>
-              <th class="col-num"><button type="button" class="sortbtn" data-sort="giZScore" data-dir="desc" title="Getis-Ord Gi* z-score">Gi*&nbsp;z<span class="caret"></span></button></th>
-              <th class="col-num"><button type="button" class="sortbtn" data-sort="corroborationCount" data-dir="desc" title="Independent corroborating reports">Corr<span class="caret"></span></button></th>
-            </tr>
-          </thead>
-          <tbody id="rank-body">
-            <tr class="empty-row"><td colspan="5">No ranking yet — run the pipeline.</td></tr>
-          </tbody>
-        </table>
+  <div class="col-right">
+    <!-- ═════════════ E · CHECKPOINT QUEUE ═════════════ -->
+    <section class="region region-checkpoint tabbed" id="region-checkpoint" aria-labelledby="h-checkpoint" data-tab-panel="checkpoint">
+      <header class="region-head region-head-checkpoint" id="checkpoint-head">
+        <h2 id="h-checkpoint">Human Checkpoint <span class="count-pill count-pill-warn" id="cp-count">0</span></h2>
+      </header>
+      <div class="region-body" id="checkpoint-body"></div>
+    </section>
+
+    <!-- ═════════════ F · ACTIVITY ═════════════ -->
+    <section class="region region-activity tabbed" id="region-activity" aria-labelledby="h-activity" data-tab-panel="activity">
+      <header class="region-head">
+        <h2 id="h-activity">Activity</h2>
+        <div class="seg seg-sm" role="group" aria-label="Filter activity">
+          <button type="button" data-act="all" aria-pressed="true">All</button>
+          <button type="button" data-act="incidents" aria-pressed="false">Incidents</button>
+          <button type="button" data-act="decisions" aria-pressed="false">Decisions</button>
+          <button type="button" data-act="pipeline" aria-pressed="false">Pipeline</button>
+        </div>
+      </header>
+      <div class="region-body">
+        <ul class="feed" id="activity-list" aria-live="polite" aria-relevant="additions"></ul>
       </div>
     </section>
-
-    <section class="rail-block rail-block--log">
-      <header class="rail-head">
-        <h2>Activity</h2>
-        <span class="rail-sub" id="activity-sub">agent trace</span>
-      </header>
-      <ol class="activity" id="activity" aria-live="polite" aria-relevant="additions">
-        <li class="activity-empty">Waiting for the first pipeline pass…</li>
-      </ol>
-    </section>
-
-  </aside>
+  </div>
 </main>
 
-<!-- ══════════════ FAILURE FEED (persistent) ══════════════ -->
-<footer class="failfeed" aria-label="Incident feed">
-  <div class="failfeed-head">
-    <span class="ff-title">FAIL&nbsp;FEED</span>
-    <span class="ff-count" id="ff-count">0</span>
-    <span class="ff-hint">real failure branches — degraded connectors, LLM fallback, cold start</span>
-  </div>
-  <div class="failfeed-strip" id="failfeed" aria-live="polite">
-    <div class="ff-empty">No incidents recorded. Failures will appear here as they happen.</div>
-  </div>
+<!-- ═════════════ G · SOURCE HEALTH ═════════════ -->
+<footer class="sources-strip tabbed" id="region-sources" aria-labelledby="h-sources" data-tab-panel="sources">
+  <h2 id="h-sources" class="strip-label">Sources</h2>
+  <div class="source-chips" id="source-chips"></div>
+  <div class="source-agg" id="source-agg"></div>
 </footer>
 
-<!-- ══════════════ EVIDENCE DRAWER ══════════════ -->
-<div class="drawer-scrim" id="drawer-scrim" hidden></div>
-<section class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title" hidden>
-  <header class="drawer-head">
-    <div>
-      <p class="drawer-kicker" id="drawer-kicker">EVIDENCE TRAIL</p>
-      <h2 id="drawer-title">—</h2>
-      <p class="drawer-meta" id="drawer-meta"></p>
-    </div>
-    <button class="iconbtn" id="drawer-close" type="button" aria-label="Close evidence drawer">✕</button>
-  </header>
-  <div class="drawer-body" id="drawer-body"></div>
-</section>
-
-<!-- ══════════════ HUMAN CHECKPOINT ══════════════ -->
-<!-- Persistent, non-dismissible bar. Only disappears when nothing is pending. -->
-<button class="checkpoint-bar" id="checkpoint-bar" type="button" hidden>
-  <span class="cp-bar-pulse" aria-hidden="true"></span>
-  <strong id="cp-bar-count">0 decisions</strong>
-  <span>awaiting a named human. Nothing becomes actionable until one of them signs.</span>
-  <span class="cp-bar-cta">Review →</span>
-</button>
-
-<div class="cp-scrim" id="cp-scrim" hidden>
-  <section class="cp-modal" id="cp-modal" role="dialog" aria-modal="true" aria-labelledby="cp-title">
-    <header class="cp-head">
-      <div>
-        <p class="cp-kicker">HUMAN CHECKPOINT</p>
-        <h2 id="cp-title">Decisions held pending</h2>
-        <p class="cp-sub">Signal Zero never issues a dispatch instruction. Approval unlocks a <em>sorted candidate list</em> — never an assignment.</p>
-      </div>
-      <button class="iconbtn" id="cp-minimize" type="button" aria-label="Minimize — items stay pending">Minimize</button>
-    </header>
-    <div class="cp-body" id="cp-body"></div>
-    <footer class="cp-foot" id="cp-foot"></footer>
-  </section>
+<!-- ═════════════ H · CHECKPOINT BAR ═════════════ -->
+<div class="cbar" id="checkpoint-bar">
+  <p id="cbar-text">No decisions pending. Everything raised so far has been signed for.</p>
+  <button type="button" class="btn btn-warn" id="cbar-action" hidden>Review queue →</button>
 </div>
 
-<div class="toast-wrap" id="toasts" aria-live="assertive"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<div id="modal-root"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="app.js"></script>
+<script type="module" src="./app.js"></script>
+<noscript><p style="padding:24px;font:14px system-ui">Signal Zero needs JavaScript. The API is still readable at <a href="/api/state">/api/state</a>.</p></noscript>
 </body>
 </html>

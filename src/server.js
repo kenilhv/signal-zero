@@ -104,6 +104,21 @@ let running = false;
 const MAX_ESCALATIONS_PER_RUN = 8;
 const MAX_AMBIGUOUS_PER_RUN = 12;
 
+// Mirror of rank.js's escalation thresholds, used ONLY if the rank stage failed
+// to load. Kept explicit and named so the rule is readable from here too: the
+// evidence for "anomalously silent" is about the SETTLEMENT (how long it has
+// been quiet relative to its own expected cadence), not about its neighbours.
+const ESCALATION_MIN_SURPRISAL_NATS = 3.0; // e^-3 ~= a 5% wait; == 3x its expected gap
+const ESCALATION_MIN_SILENCE_HOURS = 6; // absolute wall-clock floor
+
+function fallbackEscalationGate(s) {
+  return (
+    Number(s.silenceHours) >= ESCALATION_MIN_SILENCE_HOURS &&
+    Number(s.surprisal) >= ESCALATION_MIN_SURPRISAL_NATS &&
+    Number(s.ownZScore) > 0
+  );
+}
+
 export async function runPipeline() {
   if (running) {
     return { ok: false, error: 'A pipeline pass is already running.', reportCount: store.reports.length, durationMs: 0 };
@@ -183,15 +198,29 @@ export async function runPipeline() {
     // Escalations for the top anomalous silences, plus every ambiguous dedup pair.
     // Nothing here is actionable until a named human decides. createEscalation is
     // idempotent per settlement, so re-running never buries earlier human decisions.
+    //
+    // The gate is rank.js's qualifiesForEscalation, NOT isLocalAnomaly. Gi* is a
+    // neighbourhood statistic, so a settlement that reported minutes ago clears
+    // it whenever the corridor around it is dark; escalating on it alone raised
+    // items like "Anomalous silence: Nilkantha - 0h with no confirming report".
+    // If the rank module is unavailable or renamed we fall back to an equivalent
+    // local rule rather than to the old, broken one.
+    // Deliberately not pick(): pick() falls back to a module's default export,
+    // which here is rank() itself, and calling that as a predicate would be
+    // silently truthy for every row.
+    const escalationGate =
+      typeof stageModules.rank?.qualifiesForEscalation === 'function'
+        ? stageModules.rank.qualifiesForEscalation
+        : fallbackEscalationGate;
     const anomalies = store.ranked
-      .filter((s) => s && s.isLocalAnomaly)
+      .filter((s) => s && escalationGate(s))
       .slice(0, MAX_ESCALATIONS_PER_RUN);
 
     for (const s of anomalies) {
       try {
         createEscalation({
           settlementId: s.settlementId,
-          title: `Anomalous silence: ${s.name} (${s.district}) - ${round(s.silenceHours)}h with no confirming report`,
+          title: `Anomalous silence: ${s.name} (${s.district}) - ${round(s.silenceHours)}h with no confirming report, expected roughly every ${round(s.expectedGapHours)}h`,
           evidence: {
             settlementId: s.settlementId,
             name: s.name,
@@ -202,7 +231,12 @@ export async function runPipeline() {
             silenceHours: s.silenceHours,
             expectedGapHours: s.expectedGapHours,
             surprisal: s.surprisal,
+            // Spatial context for the human reading this - is it this one place,
+            // or is the whole valley dark? Not part of the escalation test.
             giZScore: s.giZScore,
+            ownZScore: s.ownZScore,
+            anomalyType: s.anomalyType,
+            fitBasis: s.fitBasis,
             coverageBasis: s.coverageBasis,
             corroborationCount: s.corroborationCount,
             rank: s.rank
@@ -252,9 +286,26 @@ function round(n, places = 1) {
   return Math.round(v * f) / f;
 }
 
+// A candidate is either a label the caller supplied or the full report object
+// dedup compared. Prefer the headline: the human reading the queue decides about
+// two stories, not about two opaque report ids. Never interpolate the object
+// itself - that renders as "[object Object]".
+function pairLabel(candidate, label, id, fallback) {
+  if (typeof label === 'string' && label.trim()) return label.trim();
+  if (candidate && typeof candidate === 'object') {
+    const t = String(candidate.title || candidate.label || candidate.name || '').trim();
+    if (t) return t.length > 70 ? `${t.slice(0, 69)}…` : t;
+    const cid = String(candidate.id || '').trim();
+    if (cid) return cid;
+  }
+  if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  if (typeof id === 'string' && id.trim()) return id.trim();
+  return fallback;
+}
+
 function describePair(pair) {
-  const a = pair.leftLabel || pair.aLabel || pair.leftId || pair.aId || pair.a || 'candidate A';
-  const b = pair.rightLabel || pair.bLabel || pair.rightId || pair.bId || pair.b || 'candidate B';
+  const a = pairLabel(pair.a, pair.leftLabel || pair.aLabel, pair.leftId || pair.aId, 'candidate A');
+  const b = pairLabel(pair.b, pair.rightLabel || pair.bLabel, pair.rightId || pair.bId, 'candidate B');
   const p = pair.matchProbability ?? pair.probability ?? pair.p;
   const pct = Number.isFinite(Number(p)) ? ` (match p=${round(Number(p), 2)})` : '';
   return `Ambiguous match: ${a} vs ${b}${pct}`;
@@ -483,10 +534,24 @@ function buildScoreBreakdown(ranked, reports) {
     giZScore: ranked.giZScore,
     giThreshold: 1.96,
     isLocalAnomaly: ranked.isLocalAnomaly,
+    // Gi* significance is a statement about the NEIGHBOURHOOD. Escalation needs
+    // this settlement itself to be silent and surprising - see rank.js.
+    isEscalationCandidate: ranked.isEscalationCandidate ?? false,
+    escalationThresholds: {
+      minSurprisalNats: ESCALATION_MIN_SURPRISAL_NATS,
+      minSilenceHours: ESCALATION_MIN_SILENCE_HOURS,
+      requiresOwnZAboveMean: true,
+      note: 'Gi* is context, not a gate: a wide outage flattens it exactly when it matters most.'
+    },
     coverageBasis: ranked.coverageBasis,
     corroborationCount: ranked.corroborationCount,
     reportsUsed: reports.length,
-    method: 'Exponential time-between-events baseline per hazard-tier cohort, then Getis-Ord Gi* over the river-corridor adjacency graph. Deterministic - no LLM touches these numbers.'
+    fitBasis: ranked.fitBasis ?? null,
+    cohortKey: ranked.cohortKey ?? null,
+    cohortSampleGaps: ranked.cohortSampleGaps ?? 0,
+    lambdaBoundsPerHour: [1 / 72, 1 / 2],
+    method:
+      'Exponential time-between-events baseline per hazard-tier/population cohort. The rate is a Gamma-Exponential posterior: a structural prior (12h expected gap for a tier-2 settlement of 10,000, scaled sqrt-sublinearly by population and modestly by hazard tier) updated with gaps between DISTINCT reporting events (dedup clusters, near-simultaneous arrivals collapsed), then clamped to between one report per 2h and one per 72h. Getis-Ord Gi* over the river-corridor adjacency graph adds spatial context. Deterministic - no LLM touches these numbers.'
   };
 }
 
@@ -546,15 +611,25 @@ app.use((err, _req, res, _next) => {
 async function start() {
   await loadStages();
 
-  try {
-    const result = await runPipeline();
-    console.log(
-      `[signal-zero] boot pipeline pass: ${result.reportCount ?? 0} reports, ` +
-        `${store.ranked.length} settlements ranked, ${result.durationMs ?? 0}ms`
-    );
-  } catch (err) {
-    console.error('[signal-zero] boot pipeline failed (server still starting):', err.message);
-    addIncident('degraded-source', `Boot pipeline pass failed: ${err.message}`, { error: err.message });
+  // The first pipeline pass runs AFTER the server is listening, never before.
+  // Live ingest makes one upstream call per settlement, so a blocking boot pass
+  // holds the port shut for minutes and the console looks hung. Serving the shell
+  // immediately lets the operator watch ingest fill in, which is also the honest
+  // picture: an empty map that populates is the real state of the system at t=0.
+  function firstPass() {
+    runPipeline()
+      .then((result) => {
+        console.log(
+          `[signal-zero] boot pipeline pass: ${result.reportCount ?? 0} reports, ` +
+            `${store.ranked.length} settlements ranked, ${result.durationMs ?? 0}ms`
+        );
+      })
+      .catch((err) => {
+        console.error('[signal-zero] boot pipeline failed (server still serving):', err.message);
+        addIncident('degraded-source', `Boot pipeline pass failed: ${err.message}`, {
+          error: err.message,
+        });
+      });
   }
 
   const port = config.PORT || 3000;
@@ -570,6 +645,10 @@ async function start() {
     console.log(`  settlements: ${store.settlements.length}   reports: ${store.reports.length}   ` +
       `pending checkpoints: ${store.checkpoint.filter((i) => i.status === 'pending').length}`);
     console.log('');
+    console.log(`  live scrape: ${config.USE_LIVE_SCRAPE ? 'ON' : 'off (bundled corpus)'} ` +
+      `- first ingest pass starting now, UI is already up`);
+    console.log('');
+    firstPass();
   });
 
   server.on('error', (err) => {
