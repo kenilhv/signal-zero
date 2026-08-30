@@ -434,7 +434,13 @@ export function createMapController(opts) {
   function enableTerrain() {
     if (!map) return;
     try {
-      map.setTerrain({ source: 'terrainDEM', exaggeration: 1.5 });
+      // 2.6x, not the usual ~1.5x. The corridor runs from ~600m at Benighat to
+      // 7000m+ on the Tibet border, and at the zoom that fits all 32 settlements
+      // a realistic profile flattens into a green smear. The exaggeration is what
+      // makes it read as the valley these places actually sit in - which is the
+      // whole reason a downstream settlement is a neighbour and a village over
+      // the ridge is not.
+      map.setTerrain({ source: 'terrainDEM', exaggeration: 2.6 });
       terrainOn = true;
       if (rung === 0) banner(null);
       syncHillshade();

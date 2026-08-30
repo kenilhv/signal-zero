@@ -133,7 +133,11 @@
       <div class="map-status" id="map-status">Loading terrain…</div>
       <div class="map-tip" id="map-tip" hidden></div>
 
-      <details class="legend" id="legend" open>
+      <!-- Collapsed by default: the map is the hero and an always-open legend
+           covered roughly a quarter of it. The same encoding is legible in the
+           rank list (silence hours, "no data reached us" chips), so nothing is
+           hidden - this is one click away, not gone. -->
+      <details class="legend" id="legend">
         <summary>Legend</summary>
         <div class="legend-body">
           <div class="legend-block">

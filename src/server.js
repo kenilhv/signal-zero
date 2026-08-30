@@ -358,34 +358,56 @@ function simulateDegradedSource() {
 }
 
 function simulateAmbiguousMatch() {
-  const fn = findSimulator(['simulateAmbiguousMatch', 'simulateAmbiguous']);
-  if (fn) return fn(store);
+  // dedup.js owns the band, so it owns the simulation. Its helper scores REAL
+  // report pairs and prefers a genuinely near-threshold one, only pinning to the
+  // band midpoint when the corpus has none - and then it sets forced:true and
+  // keeps originalMatchProbability, so the audit trail never claims a pair was
+  // borderline when it was not.
+  //
+  // The name here has to match dedup's export exactly. It did not, so this
+  // silently fell through to a hand-written stub that asserted p=0.61 against
+  // thresholds 0.35/0.85 - numbers from an older scheme. Under the real
+  // constants (AMBIGUOUS_LOW 0.45, ADMIT 0.60) a pair at 0.61 is above the
+  // auto-merge line: the demo was holding up an item for human review that the
+  // pipeline would have linked without asking. Exactly the kind of contradiction
+  // this checkpoint exists to prevent.
+  const fn = findSimulator(['simulateAmbiguousPair', 'simulateAmbiguousMatch', 'simulateAmbiguous']);
+  const pair = fn ? fn(store.reports) : null;
 
-  // Two real near-identical transliterations from the gazetteer make the honest demo.
-  const a = store.settlements[0] || { id: 'unknown-a', name: 'Candidate A' };
-  const b = store.settlements.find((s) => s.id !== a.id) || { id: 'unknown-b', name: 'Candidate B' };
+  if (!pair) {
+    return addIncident(
+      'degraded-source',
+      'Could not simulate an ambiguous match: no scoreable report pair is loaded yet.',
+      { simulated: true, reason: 'no-candidate-pair' }
+    );
+  }
 
   const item = createAmbiguousMatch({
-    title: `Ambiguous match: "${a.name}" vs "${b.name}" - Fellegi-Sunter p in the grey zone`,
-    evidence: {
-      leftId: a.id,
-      rightId: b.id,
-      leftSettlementId: a.id,
-      rightSettlementId: b.id,
-      leftLabel: a.name,
-      rightLabel: b.name,
-      matchProbability: 0.61,
-      lowerThreshold: 0.35,
-      upperThreshold: 0.85,
-      note: 'Below the auto-merge threshold and above auto-reject. The machine refuses to guess.',
-      simulated: true
-    }
+    title: pair.title || describePair(pair),
+    settlementId: pair.settlementId ?? null,
+    evidence: { ...pair, simulated: true }
   });
+
+  // Report the pair's ACTUAL score, not a literal. If dedup had to pin the score
+  // to the band midpoint because the corpus held nothing genuinely borderline,
+  // say so and carry the original - a reviewer has to be able to tell a real
+  // undecidable pair from a manufactured one.
+  const p = Number(pair.matchProbability);
+  const forced = pair.forced === true;
+  const origin = forced
+    ? ` (forced into the band for the demo; scored ${round(Number(pair.originalMatchProbability), 3)})`
+    : '';
 
   const incident = addIncident(
     'llm-fallback',
-    `Low-confidence classification held for review: "${a.name}" vs "${b.name}"`,
-    { simulated: true, checkpointId: item.id, matchProbability: 0.61 }
+    `Match held for a human: ${describePair(pair)}${origin}`,
+    {
+      simulated: true,
+      forced,
+      checkpointId: item.id,
+      matchProbability: Number.isFinite(p) ? p : null,
+      originalMatchProbability: pair.originalMatchProbability ?? null
+    }
   );
   incident.detail.checkpointItem = item.id;
   return { incident, checkpointItem: item };

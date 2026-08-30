@@ -1388,18 +1388,21 @@ function syncLayout() {
   syncLegend();
 }
 
-// The legend must never eat the map. On a short pane it folds to its summary;
-// the operator can always open it, and the ramp stays one click away.
+// The legend must never eat the map. It stays folded to its summary until the
+// operator asks for it - measured at 1600x1000 it covered about a quarter of the
+// map, which is the one element on screen that has to carry the story. The ramp
+// is one click away, and the same encoding is already readable in the rank list
+// (silence hours, Gi* z-score, "no data reached us" chips), so folding it hides
+// nothing. Once the operator sets it either way, userSet wins and we stop
+// touching it.
 function syncLegend() {
   const legend = $('#legend');
   const pane = $('#map-canvas');
   if (!legend || !pane) return;
   if (legend.dataset.userSet === '1') return;
-  const r = pane.getBoundingClientRect();
-  const want = document.body.dataset.layout !== 'tabs' && r.height >= 420 && r.width >= 620;
-  if (legend.open === want) return;
+  if (legend.open === false) return;
   legendProgrammatic = true;
-  legend.open = want;
+  legend.open = false;
 }
 
 function renderLegend() {
