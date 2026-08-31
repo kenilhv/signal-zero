@@ -63,6 +63,12 @@ A sentence with no verb from lists A-C can still be an instruction, because asse
 - "Timure has had no contact - people there are trapped."
 - "Nobody has reached Syabrubesi; the situation is critical."
 - "This is where the missing are."
+- "The silence indicates prolonged communication disruption." ← the most common
+  one in practice. Silence in our inbox is *consistent with* a communications
+  outage, damage, a flat battery, or a correspondent who filed elsewhere. Naming
+  one cause converts an absence into a diagnosis.
+- "Immediate attention is required to restore connectivity." ← an instruction
+  wearing a passive-voice coat. "Required" by whom, of whom?
 
 Each asserts a fact about the settlement that the data does not contain, and each names an
 action by implication. The test: *does this sentence tell a reader what the world is like
@@ -163,10 +169,17 @@ Run this against every sentence. It is cheap and it catches the ordinary failure
 
    ```
    recommend|suggest|advis|should|must |need to|urge|deploy|dispatch|
-   send |assign|allocat|mobiliz|route |task |airlift|prioriti[sz]|priority|
-   target|focus (on|efforts)|first stop|start with|go to|head for|
-   triage|deprioriti|write off|act now|urgent
+   send |assign(?!ment)|allocat|mobiliz|route |task |airlift|prioriti[sz]|
+   priority|target|focus (on|efforts)|first stop|start with|go to|head for|
+   triage|deprioriti|write off|act now|urgent|immediate|required|
+   communications? (are |is )?down|communication disruption|cut off
    ```
+
+   Two deliberate exemptions, both because the permitted phrasing contains the
+   substring: `assign(?!ment)` lets through *"this ordering is not an
+   assignment"*, and a `required` inside *"a named approver is required"* is a
+   statement about the approval gate, not about a settlement. Everything else
+   that matches is a rewrite.
 
 2. **Subject check** - for every sentence whose grammatical subject is a settlement, ask:
    what evidence do we hold *about that settlement*? If the answer is "the absence of
