@@ -220,3 +220,106 @@ Observed output after allowing, from live Bright Data results:
 > affecting Timure and Syabrubesi areas, with damage extending to Mugling."
 
 `turn.done → status: done`, 2,857 tokens, 1,728 cache reads.
+
+---
+
+# Skills: registered and healthy, body does not mount (root-caused)
+
+Skills register cleanly (`POST /api/v1/settings/skills` → 201, `GET /api/v1/skills` lists all
+three). TrueForge injects their **metadata** — measured directly, `input_tokens_breakdown.skills`
+= 226 tokens with a skill attached, 0 without. That is progressive disclosure level 1.
+
+The SKILL.md **body** requires the sandbox, and the sandbox chain fails. Two separate blockers,
+one now fixed:
+
+### Blocker 1 — pip cannot install pydantic (FIXED)
+
+`LocalSandboxProvider.ensureVenv` creates the venv on the host, then runs pip **inside** the
+sandbox, which is `bwrap --unshare-net`. pip therefore has no network and the SRT host-side
+proxy closes the connection:
+
+```
+Sandbox initialization failed: Failed to pip install pydantic>=2.0.0,<3.0.0 into sandbox .venv:
+ProxyError('Cannot connect to proxy.', RemoteDisconnected(...))
+```
+
+Fixed without touching sandbox security — no capability grants, no bwrap shim — by making the
+install offline:
+
+```bash
+# wheels must live under a path the sandbox binds; /opt is NOT bound, /usr is
+mkdir -p /usr/local/share/sz-wheels
+python3 -m pip download 'pydantic>=2.0.0,<3.0.0' -d /usr/local/share/sz-wheels
+printf '[global]\nno-index = true\nfind-links = /usr/local/share/sz-wheels\n' > /etc/pip.conf
+```
+
+`/etc/pip.conf` IS read inside the sandbox — the first attempt with the wheels in `/opt` failed
+with `WARNING: Location '/opt/wheels' is ignored: it is either not existent or not accessible`,
+which proves pip read the config and only the path was wrong.
+
+**Result:** `sandbox.created` now fires. Before this, it never did.
+
+### Blocker 2 — the skill's git clone (STILL OPEN)
+
+With the sandbox alive, the failure moves one step down, to `SkillMounter.getSandboxInit`, which
+runs `git ls-remote` **inside** the sandbox against the skill's repo URL:
+
+```
+Sandbox initialization failed: (exit code 1): WARNING: git ls-remote failed (exit 128):
+fatal: unable to access 'https://github.com/kenilhv/signal-zero/': Proxy...
+```
+
+Same root cause as blocker 1: no network in the sandbox, broken proxy. Attempted the same class
+of fix — a local bare mirror plus system-wide URL rewriting:
+
+```bash
+git clone --bare https://github.com/kenilhv/signal-zero.git /usr/local/share/sz-repo
+printf '[url "/usr/local/share/sz-repo"]\n\tinsteadOf = https://github.com/kenilhv/signal-zero\n' > /etc/gitconfig
+```
+
+Verified working **on the host**: `git ls-remote https://github.com/kenilhv/signal-zero` resolves
+locally with no network. It does **not** take effect inside the sandbox — unlike `/etc/pip.conf`,
+`/etc/gitconfig` is evidently not visible to the sandboxed git, or git there reads a different
+config path.
+
+### Why the underlying proxy is broken
+
+Independently established: the sandbox is `@anthropic-ai/sandbox-runtime` 0.0.71, invoked
+`--unshare-net --unshare-user --cap-drop ALL` with `HTTP_PROXY=http://srt.…@localhost:3128` and
+socat bridges to a unix socket. The bridge mechanism itself works (a test server inside bwrap was
+reachable through an equivalent bridge). The SRT **host-side** proxy accepts and closes with no
+response. Separately the SRT CLI aborts with
+`apply-seccomp: write /proc/self/uid_map: Operation not permitted`, whose own message says nested
+userns needs `CAP_SYS_ADMIN` — which `--cap-drop ALL` has removed. Running the container
+`--privileged` does not help, because SRT drops the capabilities itself.
+
+Granting them back (shimming bwrap with `--cap-add ALL`) would hand full capabilities to a
+sandbox that deliberately dropped them. Not done, and not recommended.
+
+### What is honestly claimable
+
+- ✅ Skills are real, git-backed, registered, healthy, and their metadata is provably in the
+  model's context with a measured token count.
+- ✅ Their content is verified to take the model from **2/5 to 5/5** on cases drawn from the
+  product's spine (see the A/B below).
+- ✅ The sandbox now initializes, which it did not before.
+- ❌ NOT claimable: "the skills are mounting and driving the pipeline." They are not.
+
+### The A/B, and a finding worth showing deliberately
+
+Same model, temp 0, `sandbox.enabled: true` in all three arms:
+
+| Case | control | metadata only (harness today) | full body |
+|---|---|---|---|
+| "Rasuwa district" only → want `null` | FAIL | FAIL | **PASS** |
+| "Syaphrubesi" → Syabrubesi | PASS | PASS | PASS |
+| 12 outlets, one AP dispatch → 1 observation | PASS | PASS | PASS |
+| NDRRMA district roll-up → `null` | FAIL | FAIL | **PASS** |
+| Operator note, banned-term lint | FAIL (4 hits) | FAIL (5 hits) | **PASS (0)** |
+| **Total** | **2/5** | **2/5** | **5/5** |
+
+The metadata-only arm scores identically to control — and on case 1 it is *worse*, fabricating
+"Dhunche is the most downstream settlement in the Trishuli corridor" (false; Dhunche is
+off-mainstem, tier 2). **A skill description without its body can increase confident
+fabrication.** That is a genuine harness finding and worth raising deliberately rather than
+letting someone discover it.

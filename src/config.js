@@ -63,6 +63,31 @@ export const TRUEFORGE_AGENT = str('TRUEFORGE_AGENT', 'signal-zero-triage-tier3'
 export const TRUEFORGE_TIMEOUT_MS = int('TRUEFORGE_TIMEOUT_MS', 15000);
 export const TRUEFORGE_POLL_MS = int('TRUEFORGE_POLL_MS', 350);
 
+// --- ESCALATION DRAFTER (the second and last LLM touchpoint) ---------------
+// Stage 5 holds an anomalously silent settlement for a NAMED human. The packet
+// that human reads is DRAFTED by this registered agent, bound BY NAME - never as
+// an inline spec, because the whole point is that its instructions (PREPARE
+// NEVER SEND, NEVER NAME A DESTINATION, NEVER ASSERT HARM) live in the TrueForge
+// registry. Every draft is run through src/guardrails/ before it is accepted; a
+// violation blocks it and the deterministic template in checkpoint.js is used
+// instead, with a visible incident. See src/harness/escalation-drafter.js.
+export const TRUEFORGE_DRAFTER_AGENT = str('TRUEFORGE_DRAFTER_AGENT', 'signal-zero-escalation-drafter');
+// Independent kill switch. TRUEFORGE_ENABLED=false disables this too.
+export const TRUEFORGE_DRAFT_ENABLED = bool('TRUEFORGE_DRAFT_ENABLED', true);
+// Much larger than tier 3's: a measured packet is ~940 output tokens and takes
+// roughly 50s on this model. 15s would time out every single time.
+export const TRUEFORGE_DRAFT_TIMEOUT_MS = int('TRUEFORGE_DRAFT_TIMEOUT_MS', 120000);
+// How many escalations one pass may draft. Bounded because each is a ~50s turn
+// and a pass that raises 8 escalations must not take seven minutes. Escalations
+// beyond the budget get the template and SAY SO in their provenance; the next
+// pass drafts the ones that are still undrafted.
+export const TRUEFORGE_DRAFT_MAX_PER_PASS = int('TRUEFORGE_DRAFT_MAX_PER_PASS', 2);
+// FAULT INJECTION for demonstrating the guardrail block path. Empty = off.
+// 'guardrail' | 'certainty' | 'garbage'. Taints the model's returned text before
+// the guardrail runs, and the injected span is recorded on the incident so a
+// blocked draft raised this way is never mistaken for something the agent wrote.
+export const TRUEFORGE_DRAFT_CHAOS = str('TRUEFORGE_DRAFT_CHAOS', '');
+
 // Live scraping only makes sense when we actually have a Bright Data token.
 export const USE_LIVE_SCRAPE = bool('USE_LIVE_SCRAPE', false) && BRIGHTDATA_API_TOKEN !== '';
 
@@ -78,6 +103,11 @@ export const config = {
   TRUEFORGE_AGENT,
   TRUEFORGE_TIMEOUT_MS,
   TRUEFORGE_POLL_MS,
+  TRUEFORGE_DRAFTER_AGENT,
+  TRUEFORGE_DRAFT_ENABLED,
+  TRUEFORGE_DRAFT_TIMEOUT_MS,
+  TRUEFORGE_DRAFT_MAX_PER_PASS,
+  TRUEFORGE_DRAFT_CHAOS,
   USE_LIVE_SCRAPE
 };
 

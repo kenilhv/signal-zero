@@ -16,6 +16,8 @@
 // assignment, a dispatch, or an instruction. See buildShortlist() for why.
 
 import { store, addIncident } from '../store.js';
+import { guardInput, guardOutput, describeVerdict, worstSeverity } from '../guardrails/index.js';
+import * as drafter from '../harness/escalation-drafter.js';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -104,7 +106,7 @@ function nextId(kind) {
 // (a route handler, a test, a future teammate in a hurry) fails loudly.
 const setStatusInternal = new WeakMap();
 
-function makeItem({ kind, settlementId, title, evidence }) {
+function makeItem({ kind, settlementId, title, evidence, provenance }) {
   assertNoDispatchFields(evidence ?? {});
 
   let status = 'pending';
@@ -115,6 +117,13 @@ function makeItem({ kind, settlementId, title, evidence }) {
     settlementId: settlementId ?? null,
     title: String(title ?? '').trim() || '(untitled checkpoint item)',
     evidence: evidence ?? {},
+    // WHO WROTE THE WORDS THIS HUMAN IS ABOUT TO SIGN.
+    // Every item carries this, always, so the UI never has to infer it. See
+    // makeProvenance() - `source` is either 'harness-drafted' (the registered
+    // TrueForge agent wrote it and every guardrail accepted it) or 'template'
+    // (deterministic string templating here), and a template item always names
+    // the reason it is not a draft.
+    provenance: provenance ?? makeProvenance({ source: drafter.DRAFT_SOURCE.TEMPLATE }),
     approvedBy: null,
     decidedAt: null,
     createdAt: new Date().toISOString()

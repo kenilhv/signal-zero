@@ -1815,6 +1815,17 @@ function decisionFooter() {
   const sync = () => {
     const on = input.value.trim().length > 0;
     for (const b of [reject, approve]) b.setAttribute('aria-disabled', String(!on));
+    // needName() below latches a red "Enter your name" error and aria-invalid on
+    // the field. Nothing used to take them off again, so once an operator had
+    // clicked a disabled button, the dialog showed enabled buttons and a red
+    // "enter your name" error side by side for the rest of its life — and a
+    // screen reader kept announcing a filled, valid field as invalid. Clearing
+    // is part of validating, so it belongs here, on the same signal.
+    if (on) {
+      help.classList.remove('err');
+      help.textContent = HELPER_DEFAULT;
+      input.removeAttribute('aria-invalid');
+    }
     if (on && !wasEnabled) {
       announce.textContent = 'Approve and reject are now available.';
       wasEnabled = true;
