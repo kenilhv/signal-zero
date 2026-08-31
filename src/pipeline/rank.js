@@ -775,13 +775,35 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
   for (const row of rows) row.isEscalationCandidate = qualifiesForEscalation(row);
 
   // ---- STEP C: deterministic ordering --------------------------------------
-  // Gi* desc, then surprisal desc, then population desc, then id asc so the
+  // surprisal desc, then Gi* desc, then population desc, then id asc, so the
   // order is fully reproducible for the audit trail. Population is a TIE-BREAK
   // only; its real influence is upstream, in the cohort that set lambda.
+  //
+  // SURPRISAL IS PRIMARY, NOT Gi*. This used to be the other way round, and it
+  // was wrong in a way that attacked the product's only claim.
+  //
+  // Gi* is a NEIGHBOURHOOD statistic: it is high when a settlement sits INSIDE a
+  // cluster of high values, whether or not the settlement itself is quiet. Rank
+  // by it and a place that reported five minutes ago, surrounded by neighbours
+  // silent for four days, sorts to the top of a list titled "ranked by silence".
+  // The row was labelled honestly ('cluster-edge') and correctly excluded from
+  // escalation, but neither of those fixes the ORDERING, and the ordering is what
+  // an operator actually reads. evals family B measured it: over 40 randomised
+  // placements a freshly-heard-from settlement reached the top ten.
+  //
+  // surprisal is that settlement's OWN evidence: -ln P(gap >= silenceHours)
+  // under its own fitted rate. A settlement heard from minutes ago scores ~0 no
+  // matter how dark its neighbourhood is, so it cannot displace a genuinely
+  // silent one. Gi* keeps its job as the tie-break - among settlements equally
+  // surprising on their own terms, the one whose neighbours also went quiet is
+  // the more urgent read - and the spatial signal is still surfaced explicitly
+  // through anomalyType and the isLocalAnomaly filter. Demoting it costs no
+  // information; it just stops a neighbourhood measure from being presented as
+  // a per-settlement one.
   rows.sort(
     (a, b) =>
-      b.giZScore - a.giZScore ||
       b.surprisal - a.surprisal ||
+      b.giZScore - a.giZScore ||
       b.population - a.population ||
       (a.settlementId < b.settlementId ? -1 : a.settlementId > b.settlementId ? 1 : 0)
   );

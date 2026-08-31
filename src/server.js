@@ -319,6 +319,14 @@ function harnessSummary() {
     harnessBaseUrl: h.baseUrl ?? null,
     harnessModel: h.model ?? null,
     harnessSessionId: h.sessionId ?? null,
+    // Tier-3 turns run concurrently, one pooled session each (TrueForge
+    // serializes turns inside a session). `harnessSessionId` is the first
+    // session of the pass; this is every one it used, and `pool` is what the
+    // pool actually did - the configured cap, sessions CREATED this pass,
+    // acquisitions that reused one, and how many are live. None of it is a
+    // claim about parallelism: the per-turn latencies in `turns` are that.
+    harnessSessionIds: Array.isArray(h.sessionIds) ? h.sessionIds : [],
+    pool: h.pool ?? null,
     harnessTokens: h.totalTokens ?? 0,
     // --- which agent, and how the session was bound to it -------------------
     agentName: h.agentName ?? null,

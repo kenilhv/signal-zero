@@ -56,6 +56,55 @@ const GAZETTEER_PATH = path.join(HERE, '..', 'data', 'gazetteer.json');
 const MAX_LLM_CALLS = 6;
 const LLM_TIMEOUT_MS = 12000;
 
+/**
+ * How many tier-3 harness turns may be in flight at once.
+ *
+ * CLAMPED TO THE SESSION POOL. Each concurrent turn holds one pooled TrueForge
+ * session for its whole duration, and a turn that has to queue for a session
+ * would spend that wait inside its own TRUEFORGE_TIMEOUT_MS deadline - i.e. a
+ * concurrency above the pool size does not buy parallelism, it manufactures
+ * timeouts the model never earned. Floored at 1 so a nonsense config degrades
+ * to the old sequential behaviour rather than dispatching nothing.
+ */
+const TIER3_CONCURRENCY = Math.max(
+  1,
+  Math.min(
+    Number(config.TRUEFORGE_TIER3_CONCURRENCY) || 1,
+    Number(config.TRUEFORGE_SESSION_POOL) || 1
+  )
+);
+
+/**
+ * Run `fn` over `items` with at most `limit` in flight, and SETTLE every one.
+ *
+ * Two properties this stage depends on:
+ *   1. results[i] belongs to items[i], whatever order they finished in - the
+ *      caller reads them back in its own order, so nothing downstream can
+ *      depend on completion order.
+ *   2. one rejection is captured, not propagated: a report the harness could
+ *      not classify must not abort the classifications running beside it.
+ *
+ * @returns {Promise<Array<{ok: true, value: any} | {ok: false, error: any}>>}
+ */
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: width }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        results[i] = { ok: true, value: await fn(items[i], i) };
+      } catch (error) {
+        results[i] = { ok: false, error };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 export const CATEGORIES = [
   'corroboration-candidate',
   'new-settlement',
@@ -1085,7 +1134,6 @@ export async function triage(reports, settlements) {
     );
   }
 
-  let llmCalls = 0;
   // MID-RUN DEGRADATION. The probe above describes the harness at the START of
   // the pass. It cannot describe a container that dies at t+2.5s - which is
   // precisely what a chaos test does. Without these two, the only thing that
@@ -1097,18 +1145,72 @@ export async function triage(reports, settlements) {
   let midRunFailures = 0;
   let midRunAnnounced = false;
   const firstMidRunError = { reason: null };
-  for (const { report, shortlist } of residual) {
-    const label = String(report.title || report.id).slice(0, 60);
 
-    // --- GUARDRAIL (input) -------------------------------------------------
-    // Scraped content is UNTRUSTED DATA. It is checked for prompt injection
-    // BEFORE the model is allowed to see it - catching it on the way out would
-    // already be too late. See src/guardrails/README.md.
+  // --- PHASE 1: PLAN ---------------------------------------------------------
+  // Decide, sequentially and with no I/O at all, what happens to each residual
+  // report. Two things have to be settled before anything can be dispatched:
+  //
+  //   * THE INPUT GUARDRAIL. Scraped content is UNTRUSTED DATA and is checked
+  //     for prompt injection BEFORE the model is allowed to see it - catching it
+  //     on the way out would already be too late (src/guardrails/README.md). So
+  //     a blocked report must be excluded from the dispatch set, not merely
+  //     discarded after the fact. The verdict computed here is the SAME object
+  //     phase 3 records, so the check runs exactly once per report.
+  //   * THE BUDGET. `llmCalls` used to be incremented inside the loop; the
+  //     increment happened once per report that got past the guardrail, on
+  //     whichever path was going to run it. Both of those conditions are
+  //     pass-level constants, so `spendsBudget` reproduces it exactly: with no
+  //     harness AND no key, nothing is ever spent and the budget never trips,
+  //     which is the pre-existing behaviour and not an accident.
+  const spendsBudget = harnessUsable || Boolean(config.OPENAI_API_KEY);
+  const plan = [];
+  let llmCalls = 0;
+  for (const { report, shortlist } of residual) {
     const inputVerdict = guardInput(
       `${report.title || ''}\n${report.text || ''}`,
       { reportId: report.id, sourceName: report.sourceName }
     );
     if (inputVerdict.blocked) {
+      plan.push({ report, shortlist, inputVerdict, action: 'input-blocked' });
+      continue;
+    }
+    if (llmCalls >= MAX_LLM_CALLS) {
+      plan.push({ report, shortlist, inputVerdict, action: 'budget' });
+      continue;
+    }
+    if (spendsBudget) llmCalls++;
+    plan.push({ report, shortlist, inputVerdict, action: 'classify' });
+  }
+
+  // --- PHASE 2: DISPATCH -----------------------------------------------------
+  // The harness turns are the only slow, independent work in this stage, and
+  // they were running one after another against a session that serializes them
+  // (see the pool note at the top of src/harness/trueforge.js). Run them with
+  // bounded concurrency instead - one pooled session each, every turn still a
+  // fresh root turn with previousTurnId "none".
+  //
+  // WHAT IS AND IS NOT PARALLEL. Only the turn. Every guardrail verdict,
+  // incident, counter and report mutation still happens in phase 3, in the
+  // ORIGINAL report order, so identical input produces an identical incident
+  // feed and an identical output list however the turns happen to interleave.
+  // A failure is captured per report and cannot abort its neighbours.
+  const dispatched = plan.filter((p) => p.action === 'classify');
+  const harnessSettled = new Map(); // plan entry -> {ok:true,value} | {ok:false,error}
+  if (harnessUsable && dispatched.length) {
+    const settled = await mapWithConcurrency(dispatched, TIER3_CONCURRENCY, ({ report, shortlist }) =>
+      tier3ViaHarness(report, shortlist)
+    );
+    dispatched.forEach((entry, i) => harnessSettled.set(entry, settled[i]));
+  }
+
+  // --- PHASE 3: RECORD -------------------------------------------------------
+  // Strictly sequential, in report order. Nothing below here does network I/O
+  // through the harness; it consumes what phase 2 already settled.
+  for (const item of plan) {
+    const { report, shortlist, inputVerdict, action } = item;
+    const label = String(report.title || report.id).slice(0, 60);
+
+    if (action === 'input-blocked') {
       harness.countGuardrail('input', true, inputVerdict.violations.map((v) => v.rule));
       harness.countUnresolved();
       blockAndRecord(report, inputVerdict, { label, phase: 'input' });
@@ -1119,7 +1221,7 @@ export async function triage(reports, settlements) {
     // guardrail from an absent one. Count it and put it on the feed.
     noteAdvisory(report, inputVerdict, label, 'input', 'none');
 
-    if (llmCalls >= MAX_LLM_CALLS) {
+    if (action === 'budget') {
       harness.countUnresolved();
       addIncident(
         'llm-fallback',
@@ -1134,9 +1236,13 @@ export async function triage(reports, settlements) {
     let out = null;
     let harnessError = null;
     if (harnessUsable) {
-      llmCalls++;
+      // The budget slot for this report was spent in phase 1, when the dispatch
+      // set was chosen. This is the same accounting, moved earlier.
+      const settled = harnessSettled.get(item);
       try {
-        out = await tier3ViaHarness(report, shortlist);
+        if (!settled) throw new Error('tier-3 harness turn was never dispatched for this report');
+        if (!settled.ok) throw settled.error;
+        out = settled.value;
       } catch (err) {
         harnessError = String(err && err.message ? err.message : err);
         harness.noteError(harnessError);
@@ -1216,7 +1322,8 @@ export async function triage(reports, settlements) {
 
     // --- PATH B: the direct-fetch fallback --------------------------------
     if (!out && config.OPENAI_API_KEY) {
-      if (!harnessUsable) llmCalls++; // path A never spent the budget slot
+      // The budget slot was already spent in phase 1 - `spendsBudget` covers
+      // this path too, which is why path B no longer increments here.
       try {
         out = await tier3ViaDirectFetch(report, shortlist);
         harness.countFallback();

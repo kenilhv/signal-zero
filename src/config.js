@@ -60,8 +60,39 @@ export const TRUEFORGE_MODEL = str('TRUEFORGE_MODEL', 'nebius/signal-zero-triage
 // so on the incident feed; it never silently pretends the roster was used.
 export const TRUEFORGE_AGENT = str('TRUEFORGE_AGENT', 'signal-zero-triage-tier3');
 // Wall-clock budget for one classification turn, poll included.
+//
+// This is a PER-TURN deadline, and turns now run concurrently, so it is not a
+// budget for the stage: four turns that each take 13s cost 13s of wall clock,
+// not 52s. Measured against this instance on the real ~8.3k-token prompt, a
+// completed turn takes 6.8-13.1s, so 15s leaves roughly 2s of headroom over the
+// slowest one observed. It is deliberately NOT raised to cover the cold-cache
+// turns that overrun it: a turn that cannot answer inside the budget is one the
+// direct-fetch fallback (~0.8s on Qwen3-30B-A3B) answers sooner, and raising
+// the deadline would buy a slower answer, not a better one. Concurrency makes
+// an overrun cheaper - it is now paid in parallel with the other turns - which
+// is a reason to leave the deadline alone, not to loosen it.
 export const TRUEFORGE_TIMEOUT_MS = int('TRUEFORGE_TIMEOUT_MS', 15000);
 export const TRUEFORGE_POLL_MS = int('TRUEFORGE_POLL_MS', 350);
+// How many TrueForge SESSIONS tier 3 may hold open at once.
+//
+// TrueForge serializes turns inside a single session, so one shared session was
+// a silent serialization point: independent classifications queued behind each
+// other. Measured with 4 identical small prompts against the tier-3 agent -
+// shared session/4 concurrent 9470ms, sequential 3920ms, 4 SEPARATE sessions
+// 1310ms. Sessions parallelise; a session does not.
+//
+// 4 because: tier 3 is hard-capped at 6 classifications per pass (MAX_LLM_CALLS
+// in src/pipeline/triage.js), so a bigger pool cannot be used on a normal pass;
+// a session is a real server-side object and the model provider behind TrueForge
+// is the next bottleneck once the session stops being one, so this is bounded
+// rather than "one per report"; and 4 is the width the benchmark above actually
+// measured rather than one extrapolated from it.
+export const TRUEFORGE_SESSION_POOL = int('TRUEFORGE_SESSION_POOL', 4);
+// How many tier-3 classifications may be in flight at once. Clamped to the pool
+// size at the call site: a turn that has to queue for a session would burn its
+// TRUEFORGE_TIMEOUT_MS budget parked in that queue, which is a timeout the model
+// never earned.
+export const TRUEFORGE_TIER3_CONCURRENCY = int('TRUEFORGE_TIER3_CONCURRENCY', 4);
 
 // --- ESCALATION DRAFTER (the second and last LLM touchpoint) ---------------
 // Stage 5 holds an anomalously silent settlement for a NAMED human. The packet
@@ -103,6 +134,8 @@ export const config = {
   TRUEFORGE_AGENT,
   TRUEFORGE_TIMEOUT_MS,
   TRUEFORGE_POLL_MS,
+  TRUEFORGE_SESSION_POOL,
+  TRUEFORGE_TIER3_CONCURRENCY,
   TRUEFORGE_DRAFTER_AGENT,
   TRUEFORGE_DRAFT_ENABLED,
   TRUEFORGE_DRAFT_TIMEOUT_MS,

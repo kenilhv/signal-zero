@@ -106,6 +106,48 @@ function nextId(kind) {
 // (a route handler, a test, a future teammate in a hurry) fails loudly.
 const setStatusInternal = new WeakMap();
 
+/**
+ * WHO WROTE THE WORDS A HUMAN IS ABOUT TO SIGN.
+ *
+ * Two sources, and they are not interchangeable:
+ *
+ *   harness-drafted  a registered TrueForge agent wrote the prose and every
+ *                    guardrail accepted it. Carries the agent name and the turn
+ *                    id, so the exact execution is recoverable from TrueForge.
+ *   template         deterministic string templating in this file. No model was
+ *                    involved.
+ *
+ * A template item ALWAYS names why it is not a draft. "The agent did not write
+ * this" and "the agent tried and a guardrail blocked it" are different facts
+ * about the same screen, and a reviewer signing their name is entitled to know
+ * which one they are looking at. Defaulting `reason` to null would quietly erase
+ * that distinction, so the default is the honest `not-attempted` instead.
+ *
+ * No timestamp here: the item already carries createdAt, and a second clock read
+ * would make two items built in the same pass differ for no reason.
+ */
+function makeProvenance({
+  source,
+  reason = null,
+  agent = null,
+  turnId = null,
+  guardrails = null
+} = {}) {
+  const harness = source === drafter.DRAFT_SOURCE.HARNESS;
+  return {
+    source: harness ? drafter.DRAFT_SOURCE.HARNESS : drafter.DRAFT_SOURCE.TEMPLATE,
+    // Only meaningful for a template item, and never empty for one.
+    reason: harness ? null : reason || 'not-attempted',
+    // Only meaningful for a draft. Null on a template item rather than absent,
+    // so the shape is stable and the UI never branches on key presence.
+    agent: harness ? agent ?? null : null,
+    turnId: harness ? turnId ?? null : null,
+    // Which guardrails ran and passed. An empty array means "none recorded",
+    // which is NOT the same as "none ran" - callers that know must pass them.
+    guardrails: Array.isArray(guardrails) ? guardrails.slice() : []
+  };
+}
+
 function makeItem({ kind, settlementId, title, evidence, provenance }) {
   assertNoDispatchFields(evidence ?? {});
 

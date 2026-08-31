@@ -32,11 +32,32 @@
 //     background and a malformed request fails INSIDE the run. So we poll
 //     `getTurn` and only treat `state.status === "done"` with real output as a
 //     harness execution. Anything else is an error and triggers the fallback.
-//  2. NO CONTEXT BLEED BETWEEN REPORTS. The session is reused across a run (it
-//     is the expensive object), but every turn is sent with
+//  2. NO CONTEXT BLEED BETWEEN REPORTS. Sessions are pooled and reused across a
+//     run (they are the expensive object), but every turn is sent with
 //     `previousTurnId: "none"` so each classification is a fresh root turn.
 //     Chaining would let one report's answer condition the next one's, which is
-//     unacceptable for a classifier whose output feeds an audit trail.
+//     unacceptable for a classifier whose output feeds an audit trail. This is
+//     also why tier 3 is NOT batched into one prompt: several reports in one
+//     turn is context bleed by construction, and one prompt-injected scraped
+//     report would then be sitting in its neighbours' context window.
+//
+// WHY A POOL AND NOT ONE SESSION
+// ------------------------------
+// TrueForge SERIALIZES turns inside a single session. One cached session
+// therefore made the session a silent serialization point: four independent
+// classifications that share nothing queued behind each other. Measured against
+// this instance with four identical small prompts:
+//
+//     one shared session, 4 concurrent turns   9470ms wall (turn #1 alone
+//                                              reported 9470ms - it was queueing)
+//     one session, 4 sequential turns          3920ms wall
+//     four SEPARATE sessions, 4 concurrent     1310ms wall
+//
+// So the fix is more sessions, not fewer turns. The pool is bounded
+// (TRUEFORGE_SESSION_POOL, default 4) because a session is a real server-side
+// object and because the model provider behind TrueForge is the next bottleneck
+// once the session stops being one. Isolation is unchanged: a pooled session is
+// still only ever asked for root turns.
 //
 // The harness is NEVER load-bearing for the demo. If TrueForge is unreachable,
 // the caller falls back to the pre-existing direct-fetch path and says so on the
@@ -82,10 +103,39 @@ export const BINDING = {
 let SdkCtor; // undefined = not yet attempted, null = unavailable
 let sdkLoadError = null;
 let client = null;
-let sessionId = null;
-let sessionCreatedAt = null;
-let sessionBinding = null; // BINDING.NAMED | BINDING.INLINE
-let sessionAgentId = null; // TrueForge's immutable agent id, when named
+
+/**
+ * THE SESSION POOL.
+ *
+ * @typedef {object} PooledSession
+ * @property {string}      id        TrueForge session id
+ * @property {string}      createdAt ISO timestamp of the create call
+ * @property {string}      binding   BINDING.NAMED | BINDING.INLINE, READ BACK off
+ *                                   TrueForge's own response - never assumed from
+ *                                   the request we sent
+ * @property {string|null} agentId   TrueForge's immutable agent id, when named
+ * @property {boolean}     busy      held by an in-flight turn
+ * @property {boolean}     dead      evicted (404 / stale bind); never reused
+ */
+
+/** Live sessions, busy or free. Never longer than the configured cap. */
+let pool = [];
+/** Session creations in flight. They hold a pool slot so the cap is not raced. */
+let pendingCreates = 0;
+/** Acquirers parked because the pool is at its cap and every session is busy. */
+let waiters = [];
+/** Sessions created during THIS pass. Reset by beginPass(); reported honestly. */
+let sessionsCreatedThisPass = 0;
+/** Acquisitions THIS pass that reused a session the pool already had. */
+let sessionsReusedThisPass = 0;
+/** Monotonic dispatch counter, so telemetry.turns stays in DISPATCH order. */
+let turnSeq = 0;
+
+/** The configured pool cap, floored at 1 - a pool of zero cannot run anything. */
+function poolCap() {
+  const n = Number(config.TRUEFORGE_SESSION_POOL);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
 
 /**
  * What the LAST probe learned about the registered agent. Facts read off
@@ -123,10 +173,21 @@ function freshTelemetry() {
     agentRegistered: null, // null = not probed this pass
     binding: null, // set when a session exists
     reachable: null, // null = not probed this pass
+    // The FIRST session this pass acquired, kept for compatibility with every
+    // reader that predates the pool. `sessionIds` is the complete list.
     sessionId: null,
     sessionCreatedAt: null,
-    // { turnId, status, totalTokens, inputTokens, outputTokens, cacheReadTokens,
-    //   latencyMs, approvalRequired }
+    sessionIds: [],
+    // The pool, described only in facts it can prove: the configured cap, how
+    // many sessions were actually CREATED this pass (0 on a pass that reused
+    // everything), how many acquisitions reused one, and how many sessions are
+    // live right now. It does NOT claim a parallelism it did not achieve - the
+    // per-turn latencies in `turns` are the evidence for that.
+    pool: { maxSize: poolCap(), created: 0, reused: 0, live: 0 },
+    // { seq, sessionId, turnId, status, totalTokens, inputTokens, outputTokens,
+    //   cacheReadTokens, latencyMs, approvalRequired }
+    // Ordered by `seq` (dispatch order), NOT by completion order, so the same
+    // input produces the same telemetry however the turns happen to interleave.
     turns: [],
     executedTurns: 0,
     fallbackClassifications: 0,
@@ -152,6 +213,14 @@ function freshTelemetry() {
  */
 export function beginPass() {
   telemetry = freshTelemetry();
+  sessionsCreatedThisPass = 0;
+  sessionsReusedThisPass = 0;
+  turnSeq = 0;
+  // The pool OUTLIVES a pass - that is the point of it - so `live` has to be
+  // read off the pool itself. Left to the fresh defaults it would report zero
+  // sessions on a pass that acquired none, which is a different and untrue
+  // statement from "this pass created none".
+  syncPoolTelemetry();
   // NOTE: the cached session/binding are deliberately NOT copied in. Telemetry
   // describes THIS pass. A session id carried over from a pass that ran turns,
   // reported next to executedTurns:0 on a pass where the container was down,
@@ -313,10 +382,11 @@ export async function probe() {
       return { ok: true, degraded: true, reason, models, agentRegistered: false };
     }
 
-    // A cached session bound to an agent that has since disappeared/changed id
-    // must not be reused - drop it so the next turn rebinds cleanly.
-    if (sessionId && sessionBinding === BINDING.NAMED && sessionAgentId && facts.id !== sessionAgentId) {
-      dropSession();
+    // A pooled session bound to an agent that has since disappeared/changed id
+    // must not be reused - evict it so the next turn rebinds cleanly. Only the
+    // stale ones go: a session bound to the agent that is still there is fine.
+    for (const s of [...pool]) {
+      if (s.binding === BINDING.NAMED && s.agentId && facts.id !== s.agentId) evictSession(s);
     }
 
     telemetry.lastError = null;
@@ -382,24 +452,16 @@ async function getClient() {
 }
 
 /**
- * Create the tier-3 session, or reuse the one this process already has.
+ * Create ONE new TrueForge session.
  *
  * PREFERRED: bind BY NAME to the registered agent. The instructions argument is
  * then IGNORED - the agent's own instructions live in TrueForge, which is the
  * whole point. It is passed in only to build the degraded inline spec.
  *
  * @param {string} instructions fallback system prompt (inline binding only)
- * @returns {Promise<{sessionId, created, binding, agentId}>}
+ * @returns {Promise<PooledSession>}
  */
-export async function ensureSession(instructions) {
-  if (sessionId) {
-    telemetry.sessionId = sessionId;
-    telemetry.binding = sessionBinding;
-    telemetry.agentId = sessionAgentId;
-    telemetry.sessionCreatedAt = sessionCreatedAt;
-    return { sessionId, created: false, binding: sessionBinding, agentId: sessionAgentId };
-  }
-
+async function createSession(instructions) {
   const c = await getClient();
   const useNamed = agentFacts.registered !== false;
 
@@ -417,32 +479,177 @@ export async function ensureSession(instructions) {
   if (!id) throw new Error('session created but the response carried no id');
 
   // Read the binding back off TrueForge's own response rather than assuming the
-  // request shape was honoured.
+  // request shape was honoured. Per session, because per session is where the
+  // answer can differ.
   const boundType = body.agent?.type ?? null;
-  sessionBinding = boundType === 'reference' ? BINDING.NAMED : BINDING.INLINE;
-  sessionAgentId = body.agent?.id ?? null;
-  sessionId = id;
-  sessionCreatedAt = new Date().toISOString();
-
-  telemetry.sessionId = id;
-  telemetry.sessionCreatedAt = sessionCreatedAt;
-  telemetry.binding = sessionBinding;
-  telemetry.agentId = sessionAgentId;
-
-  return { sessionId: id, created: true, binding: sessionBinding, agentId: sessionAgentId };
+  return {
+    id,
+    createdAt: new Date().toISOString(),
+    binding: boundType === 'reference' ? BINDING.NAMED : BINDING.INLINE,
+    agentId: body.agent?.id ?? null,
+    busy: false,
+    dead: false
+  };
 }
 
-/** Forget the cached session (used when a turn proves the session is gone). */
-function dropSession() {
-  sessionId = null;
-  sessionCreatedAt = null;
-  sessionBinding = null;
-  sessionAgentId = null;
+/** Keep the pool counters in telemetry current. Facts only. */
+function syncPoolTelemetry() {
+  telemetry.pool = {
+    maxSize: poolCap(),
+    created: sessionsCreatedThisPass,
+    reused: sessionsReusedThisPass,
+    live: pool.length
+  };
 }
 
-/** Exposed so a caller can force a rebind (e.g. after the roster is reloaded). */
+/**
+ * Record an acquired session in this pass's telemetry.
+ *
+ * `sessionId`/`binding`/`agentId` are kept populated for every reader that
+ * predates the pool. The binding is only ever allowed to get WEAKER within a
+ * pass: if any session in the pool bound to an inline spec, this pass does not
+ * get to claim the registered agent ran it because a different session happened
+ * to bind by name.
+ */
+function noteAcquired(session) {
+  if (!telemetry.sessionId) {
+    telemetry.sessionId = session.id;
+    telemetry.sessionCreatedAt = session.createdAt;
+  }
+  if (!telemetry.sessionIds.includes(session.id)) telemetry.sessionIds.push(session.id);
+  if (telemetry.binding === null || session.binding === BINDING.INLINE) {
+    telemetry.binding = session.binding;
+    telemetry.agentId = session.agentId;
+  }
+  syncPoolTelemetry();
+}
+
+/** The first session that is neither busy nor evicted, marked busy. */
+function takeFreeSession() {
+  const s = pool.find((x) => !x.busy && !x.dead);
+  if (s) s.busy = true;
+  return s || null;
+}
+
+/**
+ * Wake every parked acquirer. They re-check the pool and either take a free
+ * session, create one in a slot that just opened, or park again. Waking all of
+ * them (rather than one) is what makes a lost wakeup impossible; the pool is
+ * small, so the re-check costs nothing.
+ */
+function wakeWaiters() {
+  const parked = waiters;
+  waiters = [];
+  for (const resolve of parked) resolve();
+}
+
+/**
+ * Take a session out of the pool for good. Used when a turn PROVES the session
+ * is gone (404) and when the agent it was bound to changed underneath us.
+ *
+ * Only that session goes. The whole point of evicting one is that a dead
+ * session must not poison every later turn, which is exactly what a single
+ * shared session did.
+ */
+function evictSession(session) {
+  if (!session) return;
+  session.dead = true;
+  const i = pool.indexOf(session);
+  if (i >= 0) pool.splice(i, 1);
+  syncPoolTelemetry();
+  wakeWaiters(); // a slot just opened; somebody may be parked on it
+}
+
+/**
+ * Acquire a session for ONE turn. The caller MUST release it.
+ *
+ * Reuse a free one; else create one if the pool is below its cap; else park
+ * until a release or an eviction frees capacity.
+ *
+ * @param {string} instructions fallback system prompt (inline binding only)
+ * @returns {Promise<{session: PooledSession, created: boolean}>}
+ */
+async function acquireSession(instructions) {
+  for (;;) {
+    const free = takeFreeSession();
+    if (free) {
+      sessionsReusedThisPass += 1;
+      noteAcquired(free);
+      return { session: free, created: false };
+    }
+
+    // `pendingCreates` holds a slot for a create that has not landed yet, so N
+    // concurrent acquirers on an empty pool create N sessions, not N * cap.
+    if (pool.length + pendingCreates < poolCap()) {
+      pendingCreates += 1;
+      let session;
+      try {
+        session = await createSession(instructions);
+      } finally {
+        pendingCreates -= 1;
+        // A failed create released a slot. Whoever is parked can try again.
+        if (!session) wakeWaiters();
+      }
+      session.busy = true;
+      pool.push(session);
+      sessionsCreatedThisPass += 1;
+      noteAcquired(session);
+      return { session, created: true };
+    }
+
+    await new Promise((resolve) => waiters.push(resolve));
+  }
+}
+
+/**
+ * Hand a session back.
+ * @param {PooledSession} session
+ * @param {{evict?: boolean}} [opts] evict:true removes it instead of reusing it
+ */
+function releaseSession(session, { evict = false } = {}) {
+  if (!session) return;
+  session.busy = false;
+  if (evict || session.dead) {
+    evictSession(session);
+    return;
+  }
+  syncPoolTelemetry();
+  wakeWaiters();
+}
+
+/**
+ * Make sure a session exists and report what it is bound to.
+ *
+ * Kept as the module's public session entry point. It acquires from the pool
+ * and immediately releases, so it never holds a slot: callers that just want to
+ * know "is there a session, and is it bound by name" get an answer without
+ * starving a turn.
+ *
+ * @param {string} instructions fallback system prompt (inline binding only)
+ * @returns {Promise<{sessionId, created, binding, agentId}>}
+ */
+export async function ensureSession(instructions) {
+  const { session, created } = await acquireSession(instructions);
+  releaseSession(session);
+  return {
+    sessionId: session.id,
+    created,
+    binding: session.binding,
+    agentId: session.agentId
+  };
+}
+
+/**
+ * Exposed so a caller can force a FULL rebind (e.g. after the roster is
+ * reloaded). Every session goes, including ones a turn is still holding: those
+ * are marked dead, so the in-flight turn finishes on the session it already has
+ * and the session is dropped on release rather than handed to anyone else.
+ */
 export function resetSession() {
-  dropSession();
+  for (const s of pool) s.dead = true;
+  pool = [];
+  syncPoolTelemetry();
+  wakeWaiters();
 }
 
 /** Pull plain text out of a model.message, which may be a string or content parts. */
@@ -471,6 +678,20 @@ function approvalActionsOf(state) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * File a completed turn into telemetry.turns IN DISPATCH ORDER.
+ *
+ * Turns now overlap, so completion order depends on how the model happened to
+ * schedule them - which would make the same input produce a differently ordered
+ * telemetry array on every run. Insert by `seq` instead: identical input, an
+ * identical list, whatever order the answers came back in.
+ */
+function recordTurn(record) {
+  let i = telemetry.turns.length;
+  while (i > 0 && telemetry.turns[i - 1].seq > record.seq) i -= 1;
+  telemetry.turns.splice(i, 0, record);
+}
+
+/**
  * Run ONE classification turn through TrueForge and wait for it to reach a
  * terminal state.
  *
@@ -484,9 +705,28 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 export async function runTurn(instructions, prompt) {
   const startedAt = Date.now();
+  const seq = ++turnSeq;
   const c = await getClient();
-  const { sessionId: sid, created, binding, agentId } = await ensureSession(instructions);
+  // One session, held for this turn only, returned in the `finally` below. The
+  // deadline starts BEFORE the acquire on purpose: a create is a real round trip
+  // and charging it to the turn keeps the budget a wall-clock promise rather
+  // than a model-time one. Callers must not run more turns at once than the pool
+  // can hold, or the surplus would burn its budget parked in the queue.
+  const { session, created } = await acquireSession(instructions);
+  const sid = session.id;
+  const binding = session.binding;
+  const agentId = session.agentId;
+  let evict = false;
+  try {
+    return await executeTurn({ c, session, sid, created, binding, agentId, prompt, startedAt, seq,
+      markEvict: () => { evict = true; } });
+  } finally {
+    releaseSession(session, { evict });
+  }
+}
 
+/** The body of one turn. Split out so `runTurn` owns acquire/release only. */
+async function executeTurn({ c, session, sid, created, binding, agentId, prompt, startedAt, seq, markEvict }) {
   let turnRes;
   try {
     turnRes = await c.sessions.createTurn(sid, {
@@ -495,10 +735,11 @@ export async function runTurn(instructions, prompt) {
       previousTurnId: 'none'
     });
   } catch (err) {
-    // A 404 means our cached session id is stale (server restarted, session
-    // deleted, agent deleted). Drop it so the next report re-binds instead of
-    // failing every remaining classification for the same dead reason.
-    if (err?.statusCode === 404) dropSession();
+    // A 404 means THIS session id is stale (server restarted, session deleted,
+    // agent deleted). Evict that one session so the next report re-binds instead
+    // of failing every remaining classification for the same dead reason - and
+    // so a single dead session cannot poison the rest of the pool.
+    if (err?.statusCode === 404) markEvict();
     throw new Error(`createTurn failed: ${err?.message || err}`);
   }
 
@@ -554,7 +795,9 @@ export async function runTurn(instructions, prompt) {
   telemetry.outputTokens += outputTokens;
   telemetry.cacheReadTokens += cacheReadTokens;
   telemetry.approvalGate.fired += approvalSeen;
-  telemetry.turns.push({
+  recordTurn({
+    seq,
+    sessionId: sid,
     turnId,
     status: 'done',
     totalTokens,
@@ -569,7 +812,7 @@ export async function runTurn(instructions, prompt) {
   return {
     text,
     sessionId: sid,
-    sessionCreatedAt,
+    sessionCreatedAt: session.createdAt,
     sessionReused: !created,
     binding,
     agentName: binding === BINDING.NAMED ? config.TRUEFORGE_AGENT : null,
