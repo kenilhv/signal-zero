@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test \"test/**/*.test.js\" \"src/**/*.test.js\"",
+    "test": "node --test",
     "eval": "node evals/run.js",
     "eval:offline": "node evals/run.js --offline",
     "eval:strict": "node evals/run.js --strict",
@@ -22,7 +22,7 @@
     "check:fix": "biome check --write .",
     "eval:sync": "node scripts/sync-eval-readme.mjs",
     "eval:sync:check": "node scripts/sync-eval-readme.mjs --check",
-    "test:coverage": "node --experimental-test-coverage --test \"test/**/*.test.js\" \"src/**/*.test.js\""
+    "test:coverage": "node --experimental-test-coverage --test"
   },
   "dependencies": {
     "@truefoundry/trueforge-sdk": "^0.1.3",
