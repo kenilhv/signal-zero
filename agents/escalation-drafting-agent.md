@@ -1,6 +1,21 @@
 ---
 name: escalation-drafting-agent
 description: Drafts human-readable escalation packets for anomalously silent settlements. Prepares only — it never sends anything, never names a destination, never names a recipient, and never produces a dispatch instruction. Every draft lands as a pending CheckpointItem that a named human must approve.
+trueforge:
+  agent_name: signal-zero-escalation-drafter
+  role: DRAFTER (toolless by construction)
+  stage: checkpoint
+  model: nebius/signal-zero-triage
+  temperature: 0
+  max_tokens: 3000
+  iteration_limit: 4
+  dynamic_sub_agents: false
+  sandbox: false
+  compaction_threshold_tokens: 70000
+  large_tool_response: true
+  mcp_servers: []
+  skills_match: [no-dispatch-language]
+  skills_max: 1
 ---
 
 # Escalation Drafting Agent

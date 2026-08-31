@@ -11,7 +11,9 @@
 import {
   $, $$, h, clear, fmtHours, fmtZ, fmtNum, fmtInt, fmtCount, fmtLambda,
   relTime, clockTime, localFull, silStop, SIL_BANDS, anomalyOf, ANOMALY,
-  INCIDENT_KINDS, statusOf, coverageChip, safeLocal, fetchJson
+  INCIDENT_KINDS, statusOf, coverageChip, safeLocal, fetchJson,
+  silenceKind, KINDS, groupByKind, STOPPED_AFTER_HOURS,
+  countUp, staggerStep, fmtDuration, fmtDurationWords, fmtPeople, reducedMotion
 } from './lib.js';
 import { createMapController } from './map.js';
 
@@ -166,13 +168,17 @@ const pendingSettlementIds = () => new Set(pendingItems().map((i) => i.settlemen
 const rowById = (id) => rows().find((r) => r.settlementId === id) || null;
 
 // ══════════════════════════════════════════════════════════════════════════
-// Region A — command bar
+// The API banner — the console's own error state. It degrades the screen,
+// it never clears it.
 // ══════════════════════════════════════════════════════════════════════════
 
 function renderApiBanner(reason) {
   const b = el.apiBanner;
   document.body.classList.toggle('is-stale', S.stale);
-  for (const r of $$('.region, .sources-strip')) r.setAttribute('aria-busy', String(S.stale));
+  for (const r of $$('.view')) r.setAttribute('aria-busy', String(S.stale));
+  // The finding must say straight away that it is no longer being updated —
+  // waiting for the next render tick would leave a stale sentence looking live.
+  if (el.finding) renderFinding();
   if (!S.stale) { b.hidden = true; clear(b); return; }
   clear(b);
   b.hidden = false;
@@ -193,43 +199,261 @@ function renderApiBanner(reason) {
   b.append(h('button', { type: 'button', class: 'btn btn-sm', onclick: () => pollState() }, 'Retry now'));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// THE FINDING — the landing sentence.
+//
+// Built entirely from the live /api/state payload. There is no fixed string
+// anywhere in here: every count, every duration and every settlement name is
+// read off the rows that arrived in this poll. If a value is missing the
+// sentence says so rather than filling the gap.
+//
+// It distinguishes the two claims the data actually supports, because they are
+// not equally strong (docs/three-kinds-of-silence.md):
+//   • "never heard from"      — an admission of ignorance. Epistemically weak.
+//   • "reported, then stopped" — an observed transition. The strongest claim
+//     the product has, and it was previously invisible.
+//
+// States handled: before the first state arrives, before the first pass has
+// scored anything (the real first ~40s), mid-run, stale, and failed.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** "96 hours" / "4 days" — prose, and never rounded into a claim. */
+function hoursPhrase(n) {
+  if (!Number.isFinite(n)) return 'an unrecorded length of time';
+  if (n < 2) return `${n.toFixed(1)} hours`;
+  if (n < 168) return `${Math.floor(n)} hours`;
+  const d = Math.floor(n / 24);
+  return `${d} day${d === 1 ? '' : 's'}`;
+}
+
+const fnum = (id) => h('b', { class: 'fnum', id });
+
+let findingShape = '';
+function renderFinding() {
+  const line = el.finding;
+  const bLine = el.findingB;
+  const note = el.findingNote;
+  const all = rows();
+
+  // ── state 1: nothing has arrived yet ──────────────────────────────────
+  if (!S.state) {
+    if (findingShape !== 'boot') {
+      findingShape = 'boot';
+      clear(line); clear(bLine);
+      line.append(h('span', { class: 'skel skel-finding', 'aria-hidden': 'true' }),
+        h('span', { class: 'vh' }, 'Waiting for the first state from the console API.'));
+      bLine.className = 'finding-b is-none';
+    }
+    note.className = 'finding-note';
+    note.textContent = 'Waiting for the first state from the console API.';
+    return;
+  }
+
+  // ── state 2: state arrived, nothing scored yet (the real first ~40s) ───
+  if (!all.length) {
+    if (findingShape !== 'nodata') {
+      findingShape = 'nodata';
+      clear(line); clear(bLine);
+      line.append('No settlement has been scored yet.');
+      bLine.className = 'finding-b is-none';
+      bLine.textContent = 'The first pass has to reach the sources, resolve reports to places and fit ' +
+        'a baseline before anything can be ranked.';
+    }
+    note.className = 'finding-note';
+    clear(note);
+    note.append(S.running
+      ? h('span', {}, h('span', { class: 'runmark', 'aria-hidden': 'true' }), 'Pass running…')
+      : h('span', {}, 'No pipeline pass has completed.'));
+    return;
+  }
+
+  // ── state 3: live ─────────────────────────────────────────────────────
+  const g = groupByKind(all);
+  const never = g.never.length;
+  const stopped = g.stopped.length;
+  const total = all.length;
+  const neverHours = g.never.map((r) => Number(r.silenceHours)).filter(Number.isFinite);
+  const floorHours = neverHours.length ? Math.min(...neverHours) : NaN;
+
+  const shape = `live|${never > 0}|${stopped > 0}`;
+  if (shape !== findingShape) {
+    findingShape = shape;
+    clear(line);
+    clear(bLine);
+
+    // Wording is load-bearing (skills/no-dispatch-language). The sentence says
+    // what has reached US. It never says what a settlement did — we cannot see
+    // that, and asserting it would convert an absence into a diagnosis.
+    if (never > 0) {
+      line.append('Nothing has reached us from ', fnum('fnum-never'), ' of ',
+        fnum('fnum-total'), ' settlements ',
+        h('span', { id: 'finding-window' }, ''), '.');
+    } else {
+      line.append('At least one report has reached us from every one of ',
+        fnum('fnum-total'), ' settlements.');
+    }
+
+    if (stopped > 0) {
+      bLine.className = 'finding-b';
+      bLine.append(fnum('fnum-stopped'), ' ', h('span', { id: 'finding-b-verb' }, ''),
+        h('span', { class: 'fb-who', id: 'finding-b-who' }));
+    } else {
+      bLine.className = 'finding-b is-none';
+      bLine.append(h('span', { id: 'finding-b-verb' }, ''));
+    }
+  }
+
+  if (never > 0) {
+    countUp($('#fnum-never'), never);
+    const win = $('#finding-window');
+    if (win) {
+      win.textContent = Number.isFinite(floorHours)
+        ? `in ${hoursPhrase(floorHours)}`
+        : 'for a length of time the server did not record';
+    }
+  }
+  countUp($('#fnum-total'), total);
+
+  const verb = $('#finding-b-verb');
+  if (stopped > 0) {
+    countUp($('#fnum-stopped'), stopped);
+    if (verb) {
+      verb.textContent = stopped === 1
+        ? 'more reported, and nothing has reached us since.'
+        : 'more reported, and nothing has reached us since.';
+    }
+    const who = $('#finding-b-who');
+    if (who) {
+      clear(who);
+      // Named, with the two figures that matter and the moment contact was lost.
+      for (const r of g.stopped.slice(0, 3)) {
+        who.append(h('span', { class: 'fb-one', title: r.lastReportAt || '' },
+          h('b', {}, r.name || r.settlementId || 'unnamed'),
+          ` · ${fmtPeople(r.population)} · ${fmtDuration(r.silenceHours)} since the ` +
+          `${Number(r.reportCount) === 1 ? 'only report' : 'last of ' + fmtCount(r.reportCount) + ' reports'}` +
+          ` that resolved here${r.lastReportAt ? `, ${relTime(r.lastReportAt)}` : ''}`));
+      }
+      if (g.stopped.length > 3) {
+        who.append(h('span', { class: 'fb-one' }, `and ${g.stopped.length - 3} more.`));
+      }
+    }
+  } else if (verb) {
+    verb.textContent = 'No settlement reported and then stopped in this pass. That group is the ' +
+      'strongest signal this console can produce, and today it is empty.';
+  }
+
+  // ── the honest status line under the sentence ─────────────────────────
+  const st = S.state.stats || {};
+  clear(note);
+  if (S.stale) {
+    note.className = 'finding-note warnish';
+    note.append(`Last state received ${S.fetchedAt ? relTime(new Date(S.fetchedAt).toISOString()) : 'never'}. ` +
+      'The console cannot reach the API; these figures are not being updated.');
+  } else if (S.running) {
+    note.className = 'finding-note';
+    note.append(h('span', { class: 'runmark', 'aria-hidden': 'true' }),
+      'Recomputing. The sentence above is from the last completed pass.');
+  } else {
+    note.className = 'finding-note';
+    const srcs = S.state.sources.length;
+    note.append(
+      `Last complete pass ${st.lastRunAt ? (relTime(st.lastRunAt) || 'just now') : 'never'} · ` +
+      `${fmtCount(st.reportCount)} reports from ${srcs || 'no'} source${srcs === 1 ? '' : 's'} · ` +
+      `ranking computed server-side, not here.`);
+  }
+
+  announceFinding();
+}
+
+// One announcement per settled sentence — never one per animation frame.
+let lastFindingSpoken = '';
+function announceFinding() {
+  const spoken = `${el.finding.textContent.trim()} ${el.findingB.textContent.trim()}`.replace(/\s+/g, ' ');
+  if (spoken === lastFindingSpoken) return;
+  lastFindingSpoken = spoken;
+  clearTimeout(announceFinding._t);
+  announceFinding._t = setTimeout(() => {
+    if (el.findingLive) el.findingLive.textContent = spoken;
+  }, 1000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// The unmissable count: what the agent is waiting on.
+// ══════════════════════════════════════════════════════════════════════════
+
+function renderHumanBand() {
+  const n = pendingItems().length;
+  const band = el.humanBand;
+  const txt = el.humanBandText;
+  band.hidden = false;
+  band.classList.toggle('is-clear', n === 0);
+  if (el.humanBandGlyph) el.humanBandGlyph.textContent = n === 0 ? '✓' : '▮';
+  el.humanBandGo.hidden = n === 0;
+  clear(txt);
+  if (n > 0) {
+    txt.append(
+      h('b', {}, h('span', { class: 'n' }, String(n)), ` decision${n === 1 ? '' : 's'}`),
+      ` waiting on a named human. Nothing becomes actionable until someone types their name against it.`);
+  } else {
+    txt.append('Nothing is waiting on a human right now. Everything raised so far has been signed for.');
+  }
+  // Same count, three places: this band, the tab badge, the status bar.
+  el.navBadge.hidden = n === 0;
+  el.navBadge.textContent = String(n);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// What the agent is doing — pipeline stages, status track, pass numbers.
+// ══════════════════════════════════════════════════════════════════════════
+
 let lastAnnounced = '';
-function renderRail() {
-  const track = el.railTrack;
+function renderStages() {
   const st = S.state ? S.state.stats : null;
   const hasRun = !!(st && st.lastRunAt);
   const failedStages = failedStagesInLastRun();
+  const mode = S.running ? 'running' : (hasRun ? 'done' : 'pending');
+  document.body.classList.toggle('is-running', S.running);
 
-  let mode;
-  if (S.running) mode = 'running';
-  else if (hasRun) mode = 'done';
-  else mode = 'pending';
+  const stateOf = (id) => {
+    if (mode === 'running') return 'active';
+    if (mode === 'done') return failedStages.has(id) ? 'failed' : 'done';
+    return 'pending';
+  };
+  const glyphOf = (s) => (s === 'done' ? '✓' : s === 'failed' ? '▲' : s === 'active' ? '▸' : '·');
+  const wordOf = (s) => (s === 'done' ? 'complete' : s === 'failed' ? 'degraded'
+    : s === 'active' ? 'running' : 'not started');
 
-  clear(track);
-  STAGES.forEach((stage, i) => {
-    let state = 'pending';
-    if (mode === 'running') state = 'active';
-    else if (mode === 'done') state = failedStages.has(stage.id) ? 'failed' : 'done';
-    const seg = h('span', { class: 'rail-seg', 'data-state': state, title: stage.label },
-      h('span', { 'aria-hidden': 'true' }, state === 'done' ? '✓' : state === 'failed' ? '▲' : '·'),
-      stage.label);
-    track.append(seg);
-    if (i < STAGES.length - 1) track.append(h('span', { class: 'rail-conn' }));
-  });
+  // Full labels, never clipped, at every width.
+  clear(el.stageList);
+  for (const stage of STAGES) {
+    const state = stateOf(stage.id);
+    el.stageList.append(h('div', { class: 'stage-row', 'data-state': state },
+      h('span', { class: 'g', 'aria-hidden': 'true' }, glyphOf(state)),
+      h('span', {},
+        h('span', {}, stage.label),
+        h('span', { class: 'bar' }, h('i', {}))),
+      h('span', { class: 'lb' }, wordOf(state))));
+  }
+
+  clear(el.sbTrack);
+  for (const stage of STAGES) {
+    el.sbTrack.append(h('i', { 'data-state': stateOf(stage.id), title: stage.label }));
+  }
 
   let sub;
   if (mode === 'running') {
     const secs = Math.floor((Date.now() - S.runStartedAt) / 1000);
-    const mm = String(Math.floor(secs / 60)).padStart(2, '0');
-    const ss = String(secs % 60).padStart(2, '0');
-    sub = `Running — per-stage detail not reported by the server · ${mm}:${ss}`;
+    sub = `Running — the server does not report per-stage progress · ${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
   } else if (mode === 'done') {
-    sub = `Last pass: ${st.durationMs ?? '—'}ms · ${relTime(st.lastRunAt) || 'just now'}` +
-      (failedStages.size ? ` · ${failedStages.size} stage(s) degraded` : '');
+    sub = `Ready · last complete pass ${relTime(st.lastRunAt) || 'just now'}` +
+      (Number.isFinite(Number(st.durationMs)) ? ` in ${(Number(st.durationMs) / 1000).toFixed(1)}s` : '') +
+      (failedStages.size ? ` · ${failedStages.size} stage${failedStages.size === 1 ? '' : 's'} degraded` : '');
   } else {
     sub = S.state ? 'No pipeline pass has completed yet.' : 'Waiting for first state…';
   }
   el.railSub.textContent = sub;
+  el.sbText.textContent = sub;
+  el.sbText.title = sub;
   if (sub !== lastAnnounced) { lastAnnounced = sub; el.railAnnounce.textContent = sub; }
 }
 
@@ -251,18 +475,42 @@ function failedStagesInLastRun() {
   return out;
 }
 
-function renderStats() {
-  const st = S.state ? S.state.stats : {};
-  el.statReports.textContent = st.reportCount === undefined ? '—' : fmtCount(st.reportCount);
-  el.statClusters.textContent = st.clusterCount === undefined ? '—' : fmtCount(st.clusterCount);
-  el.statLastRun.textContent = st.lastRunAt ? (relTime(st.lastRunAt) || '—') : 'never';
-  el.statLastRun.title = st.lastRunAt ? st.lastRunAt : 'No pipeline pass has completed yet.';
+// Every number the pass produced, including the tier-3 telemetry — in the room
+// whose job is auditing, not on the landing view.
+function renderPassKv() {
+  const box = el.passKv;
+  clear(box);
+  if (!S.state) {
+    box.append(h('dt', {}, 'state'), h('dd', { class: 'na' }, 'not received yet'));
+    return;
+  }
+  const st = S.state.stats || {};
+  const all = rows();
+  const g = groupByKind(all);
+  const put = (k, v, na) => box.append(h('dt', {}, k), h('dd', { class: na ? 'na' : null }, v));
 
-  const n = pendingItems().length;
-  el.pendingPill.hidden = n === 0;
-  el.pendingPillN.textContent = String(n);
-  const badge = $('#tab-badge');
-  if (badge) { badge.hidden = n === 0; badge.textContent = String(n); }
+  put('Reports ingested', fmtCount(st.reportCount));
+  put('Clusters after dedup', fmtCount(st.clusterCount));
+  put('Settlements scored', all.length ? String(all.length) : 'none', !all.length);
+  put('Never reported', String(g.never.length));
+  put('Reported then stopped', String(g.stopped.length));
+  put('Heard from recently', String(g.recent.length));
+  put('Pending decisions', String(pendingItems().length));
+  put('Pass duration', Number.isFinite(Number(st.durationMs))
+    ? `${(Number(st.durationMs) / 1000).toFixed(1)}s` : 'not reported', !Number.isFinite(Number(st.durationMs)));
+  put('Last complete pass', st.lastRunAt ? localFull(st.lastRunAt) : 'never', !st.lastRunAt);
+
+  const t3 = st.tier3;
+  if (t3 && typeof t3 === 'object') {
+    put('Tier-3 by harness', fmtCount(t3.executedByHarness));
+    put('Tier-3 by fallback', fmtCount(t3.executedByFallback));
+    put('Tier-3 unresolved', fmtCount(t3.unresolved));
+    put('Harness', t3.harnessReachable ? `reachable · ${t3.harnessModel || 'model not reported'}`
+      : 'not reachable', !t3.harnessReachable);
+    if (t3.harnessTokens !== undefined) put('Harness tokens', fmtInt(t3.harnessTokens));
+  } else {
+    put('Tier-3 telemetry', 'not reported by this run', true);
+  }
 }
 
 async function runPipeline() {
@@ -272,8 +520,8 @@ async function runPipeline() {
   el.btnRun.disabled = true;
   el.btnRun.setAttribute('aria-busy', 'true');
   logLocal('Pipeline run requested from the console.');
-  renderRail();
-  const tick = setInterval(renderRail, 1000);
+  renderStages();
+  const tick = setInterval(renderStages, 1000);
   try {
     const res = await fetchJson('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 180000);
     if (res.status === 409) {
@@ -295,7 +543,7 @@ async function runPipeline() {
     S.running = false;
     el.btnRun.disabled = false;
     el.btnRun.removeAttribute('aria-busy');
-    renderRail();
+    renderStages();
     pollState();
   }
 }
@@ -307,7 +555,8 @@ async function runPipeline() {
 function visibleRows() {
   let list = rows().slice();
   if (S.filter === 'anom') list = list.filter((r) => r.anomalyType && r.anomalyType !== 'none');
-  else if (S.filter === 'nodata') list = list.filter((r) => r.coverageBasis === 'cohort-cold-start');
+  else if (S.filter === 'nodata') list = list.filter((r) => silenceKind(r) === 'never');
+  else if (S.filter === 'stopped') list = list.filter((r) => silenceKind(r) === 'stopped');
   const q = S.query.trim().toLowerCase();
   if (q) list = list.filter((r) =>
     String(r.name || '').toLowerCase().includes(q) || String(r.district || '').toLowerCase().includes(q));
@@ -326,92 +575,225 @@ function visibleRows() {
   return list;
 }
 
+// Two figures per row by default — how long silent, and how many people. Every
+// statistic behind the rank is one disclosure click away and none of it is
+// approximated. The row set is rebuilt only when something actually changed;
+// a poll that changes nothing must not tear the DOM out from under a focus.
 let rankSig = '';
+const openWhy = new Set();          // settlementIds whose disclosure is open
+const prevBand = new Map();         // settlementId -> last silence band, for the flash
+
 function renderRank(force) {
   const list = visibleRows();
   const all = rows();
   const pend = pendingSettlementIds();
+  // !!S.state is part of the signature on purpose: "no state has arrived" and
+  // "state arrived with zero rows" produce identical row lists but are two
+  // completely different screens (skeletons vs. the honest empty state). Without
+  // it the board never leaves its skeletons on a cold boot.
   const sig = JSON.stringify([
+    !!S.state, S.stale, S.running,
     S.filter, S.query, S.sort, S.selectedId, all.length,
-    list.map((r) => [r.settlementId, r.rank, r.silenceHours, r.giZScore, r.corroborationCount, r.anomalyType, r.coverageBasis, pend.has(r.settlementId)])
+    list.map((r) => [r.settlementId, r.rank, r.silenceHours, r.population, r.giZScore,
+      r.corroborationCount, r.anomalyType, r.coverageBasis, r.reportCount, pend.has(r.settlementId)])
   ]);
   if (!force && sig === rankSig) return;
+  const firstPaint = rankSig === '';
+  const reordered = rankSig !== sig;
   rankSig = sig;
 
-  el.rankCount.textContent = all.length ? `${list.length}/${all.length}` : '—';
+  const g = groupByKind(all);
+  el.rankCount.textContent = all.length
+    ? (list.length === all.length ? `${all.length} settlements` : `${list.length} of ${all.length}`)
+    : '—';
   $('#f-all').textContent = String(all.length);
   $('#f-anom').textContent = String(all.filter((r) => r.anomalyType && r.anomalyType !== 'none').length);
-  $('#f-nodata').textContent = String(all.filter((r) => r.coverageBasis === 'cohort-cold-start').length);
+  $('#f-nodata').textContent = String(g.never.length);
+  $('#f-stopped').textContent = String(g.stopped.length);
 
   const body = el.rankRows;
   clear(body);
   clear(el.rankEmpty);
+  clear(el.boardFoot);
 
-  if (!S.state) { el.rankEmpty.append(skeletonRows(8)); el.rankTable.hidden = true; return; }
-  if (!all.length) {
+  // ── loading: real, not hypothetical. The first ~40s genuinely has no rows. ──
+  if (!S.state) {
     el.rankTable.hidden = true;
-    el.rankEmpty.append(emptyState('◌', 'No ranking yet',
-      'Run the pipeline to score all 32 settlements in the Trishuli corridor.',
-      { label: 'Run pipeline', onClick: runPipeline }));
+    el.rankEmpty.append(skeletonRows(10));
+    el.boardFoot.textContent = 'Waiting for the first state from the API…';
     return;
   }
+  // ── empty ──
+  if (!all.length) {
+    el.rankTable.hidden = true;
+    el.rankEmpty.append(emptyState('◌', 'Nothing scored yet',
+      'The first pipeline pass has not produced a ranking. It reaches the sources, resolves reports ' +
+      'to places, then fits a baseline before any settlement can be ranked.',
+      S.running ? null : { label: 'Run pipeline', onClick: runPipeline }));
+    el.boardFoot.textContent = S.running ? 'Pass running…' : 'No ranking has been produced.';
+    return;
+  }
+  // ── empty after filtering ──
   if (!list.length) {
     el.rankTable.hidden = true;
     el.rankEmpty.append(emptyState('⌕', 'No settlements match',
       `${all.length} settlements are loaded. Clear the filter to see them.`,
-      { label: 'Clear filter', onClick: () => { S.query = ''; S.filter = 'all'; el.rankFilter.value = ''; syncFilterButtons(); renderRank(true); } }));
+      {
+        label: 'Clear filter',
+        onClick: () => {
+          S.query = ''; S.filter = 'all'; el.rankFilter.value = '';
+          syncFilterButtons(); renderRank(true);
+        }
+      }));
+    el.boardFoot.textContent = `0 of ${all.length} shown.`;
     return;
   }
+
   el.rankTable.hidden = false;
+  const step = staggerStep(list.length);
+  body.style.setProperty('--stg', `${step}ms`);
+  const animate = (firstPaint || reordered) && !reducedMotion();
 
-  for (const r of list) {
+  list.forEach((r, i) => {
     const stop = silStop(r.silenceHours);
-    const anom = anomalyOf(r.anomalyType);
-    const sig2 = Number(r.giZScore) > 1.96;
+    const kind = silenceKind(r);
+    const km = KINDS[kind];
+    const isPending = pend.has(r.settlementId);
+    const open = openWhy.has(r.settlementId);
+    const whyId = `why-${r.settlementId}`;
 
-    const badges = h('div', { class: 'rank-badges' });
-    if (r.anomalyType && r.anomalyType !== 'none') {
-      badges.append(h('span', { class: `anom ${anom.cls}`, title: anom.label },
-        h('span', { 'aria-hidden': 'true' }, anom.glyph), anom.short));
-    }
-    if (r.coverageBasis === 'cohort-cold-start') badges.append(coverageChip(r));
-    if (pend.has(r.settlementId)) {
-      badges.append(h('span', { class: 'pause-badge', title: 'A human decision is pending for this settlement' },
-        h('span', { 'aria-hidden': 'true' }, '⏸'), ' decision pending'));
-    }
+    const silTd = h('td', { class: 'c-sil n' }, fmtDuration(r.silenceHours));
+    silTd.style.setProperty('--band', `var(--sil-${stop})`);
+    silTd.style.setProperty('--bandtint', `var(--sil-tint-${stop})`);
 
-    const silTd = h('td', { class: 'c-sil' }, fmtHours(r.silenceHours));
-    silTd.style.borderLeftColor = `var(--sil-${stop})`;
-    silTd.style.background = `var(--sil-tint-${stop})`;
+    const whyBtn = h('button', {
+      type: 'button', class: 'why-btn', 'aria-expanded': String(open), 'aria-controls': whyId,
+      title: 'Why this ranks here',
+      'aria-label': `Why ${r.name || r.settlementId} ranks here`,
+      onclick: (ev) => {
+        ev.stopPropagation();
+        if (openWhy.has(r.settlementId)) openWhy.delete(r.settlementId);
+        else openWhy.add(r.settlementId);
+        renderRank(true);
+        const b = $(`.why-btn[aria-controls="${whyId}"]`, el.rankRows);
+        if (b) b.focus();
+      }
+    }, open ? '▾' : '▸');
 
     const tr = h('tr', {
-      class: 'rank-row', tabindex: '0', role: 'button',
-      'data-id': r.settlementId,
+      class: `rank-row${isPending ? ' is-pending' : ''}${animate ? ' enter' : ''}`,
+      tabindex: '0', role: 'button',
+      'data-id': r.settlementId, 'data-kind': kind,
       'aria-selected': String(S.selectedId === r.settlementId),
-      'aria-label': `${r.name}, ${r.district}. Rank ${r.rank}. ${fmtHours(r.silenceHours)} silent.`
+      'aria-label': `${r.name || r.settlementId}, ${r.district || 'district not recorded'}. ` +
+        `Rank ${fmtCount(r.rank)}. Silent ${fmtDuration(r.silenceHours)}. ${fmtPeople(r.population)}. ` +
+        `${km.word}.${isPending ? ' A human decision is pending here.' : ''} ` +
+        'Press Enter to open the full evidence.'
     },
       h('td', { class: 'c-rank' }, fmtCount(r.rank)),
-      h('td', { class: 'c-name' }, h('div', { class: 'rank-name' },
+      h('td', { class: 'c-name', title: `${r.name || r.settlementId} · ${r.district || 'district not recorded'}` },
         h('b', {}, r.name || r.settlementId),
-        h('span', {}, r.district || 'district not recorded'),
-        badges)),
+        h('span', { class: 'd' }, r.district || 'district not recorded')),
       silTd,
-      h('td', { class: `c-gi${sig2 ? ' is-sig' : ''}` }, fmtZ(r.giZScore)),
-      h('td', { class: 'c-corr' }, Number(r.corroborationCount) > 0 ? fmtCount(r.corroborationCount) : '—'));
+      h('td', { class: 'c-pop n' }, fmtInt(r.population)),
+      h('td', { class: 'c-kind', title: km.label },
+        h('span', { class: 'g', 'aria-hidden': 'true' }, km.glyph), km.short),
+      h('td', { class: 'c-why' }, whyBtn));
+    if (animate) tr.style.setProperty('--i', String(i));
+
+    // Direction-aware flash: worse = the ramp's own warm end, resolved = --ok.
+    // Never a new hue, and never on a poll where the band did not move.
+    const was = prevBand.get(r.settlementId);
+    if (was !== undefined && was !== stop) {
+      tr.classList.add(stop > was ? 'flash-worse' : 'flash-better');
+    }
+    prevBand.set(r.settlementId, stop);
 
     tr.addEventListener('click', () => select(r.settlementId));
     tr.addEventListener('keydown', onRankKey);
     tr.addEventListener('pointerenter', () => mapCtl && mapCtl.hover(r.settlementId, true));
     tr.addEventListener('pointerleave', () => mapCtl && mapCtl.hover(r.settlementId, false));
     body.append(tr);
+
+    if (open) body.append(whyRow(r, whyId));
+  });
+
+  const shown = list.length;
+  el.boardFoot.textContent = (shown === all.length
+    ? `All ${all.length} settlements in the corridor. `
+    : `Showing ${shown} of ${all.length} — ${all.length - shown} hidden by the filter. `) +
+    'Two figures per row; ▸ opens why it ranks there, Enter opens the full evidence.';
+}
+
+/**
+ * "Why this ranks here" — the complete statistical record for one row.
+ * Nothing here is computed in the browser; every figure is the server's own
+ * field, printed. The closing note says so explicitly.
+ */
+function whyRow(r, id) {
+  const sig = Number(r.giZScore) > 1.96;
+  const kind = silenceKind(r);
+  const stat = (k, v, opts = {}) => h('div', { class: `why-stat${opts.sig ? ' is-sig' : ''}` },
+    h('span', { class: 'k' }, k),
+    h('span', { class: `v${opts.na ? ' na' : ''}`, title: opts.title || null }, v));
+
+  const grid = h('div', { class: 'why-grid' },
+    stat('Gi* z-score', fmtZ(r.giZScore), { sig, title: 'Getis-Ord Gi* local clustering statistic' }),
+    stat('own z', fmtZ(r.ownZScore)),
+    stat('neighbour z', fmtZ(r.neighborZScore)),
+    stat('corridor neighbours', fmtCount(r.neighborCount)),
+    stat('surprisal (−ln P)', fmtNum(r.surprisal, 4)),
+    stat('λ per hour', fmtLambda(r.lambdaPerHour)),
+    stat('expected gap', fmtHours(r.expectedGapHours)),
+    stat('silence', fmtHours(r.silenceHours)),
+    stat('population', fmtInt(r.population)),
+    stat('hazard tier', fmtCount(r.hazardTier)),
+    stat('reports resolved here', fmtCount(r.reportCount)),
+    stat('independent corroboration', fmtCount(r.corroborationCount)),
+    stat('cohort', r.cohortKey || 'not recorded', { na: !r.cohortKey }),
+    stat('baseline fit', r.fitBasis || 'not recorded', { na: !r.fitBasis }),
+    stat('cohort sample gaps', fmtCount(r.cohortSampleGaps)),
+    stat('anomaly type', anomalyOf(r.anomalyType).short || 'none flagged',
+      { na: !r.anomalyType || r.anomalyType === 'none' }),
+    stat('coverage basis', r.coverageBasis || 'not recorded', { na: !r.coverageBasis }),
+    stat('last report', r.lastReportAt ? localFull(r.lastReportAt) : 'Never',
+      { na: !r.lastReportAt, title: r.lastReportAt || '' }));
+
+  const note = h('p', { class: 'why-note' });
+  if (kind === 'never') {
+    note.append(h('b', {}, 'No data reached us. '),
+      `No report has ever resolved to ${r.name || 'this settlement'}, so its expected reporting rate is ` +
+      `borrowed from cohort ${r.cohortKey || 'unknown'} rather than measured here. ` +
+      `We do not know whether it is quiet, unreachable, or simply unreported.`);
+  } else if (kind === 'stopped') {
+    note.append(h('b', {}, 'Coverage existed here and then ceased. '),
+      `${fmtCount(r.reportCount)} report${Number(r.reportCount) === 1 ? '' : 's'} resolved to ` +
+      `${r.name || 'this settlement'}, the last of them ` +
+      `${r.lastReportAt ? localFull(r.lastReportAt) : 'at a time the server did not record'}. ` +
+      `A gap in our sources still looks identical to a gap on the ground.`);
+  } else {
+    note.append(`A report reached us within the last ${STOPPED_AFTER_HOURS} hours. ` +
+      `This row is in the ranking for completeness, not because it is silent.`);
   }
+
+  const rule = h('p', { class: 'why-note' },
+    h('b', {}, 'Ordering. '),
+    'The server ranks by Gi* z descending, then surprisal, then population, then settlement id. ' +
+    'It is deterministic and no language model touches it. This console displays that rank; ' +
+    'it does not compute it.');
+
+  return h('tr', { class: 'why-row', id },
+    h('td', { colspan: '6' },
+      h('div', { class: 'why-panel' },
+        h('h4', {}, `Why ${r.name || r.settlementId} ranks ${fmtCount(r.rank)}`),
+        grid, note, rule)));
 }
 
 function onRankKey(ev) {
   const tr = ev.currentTarget;
   const all = $$('.rank-row', el.rankRows);
   const i = all.indexOf(tr);
-  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(tr.dataset.id); return; }
+  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(tr.dataset.id, { open: true }); return; }
   let next = null;
   if (ev.key === 'ArrowDown') next = all[Math.min(all.length - 1, i + 1)];
   else if (ev.key === 'ArrowUp') next = all[Math.max(0, i - 1)];
@@ -433,13 +815,10 @@ async function select(id, opts = {}) {
   S.selectedId = id;
   renderRank(true);
   if (mapCtl) mapCtl.select(id, { fly: opts.fly !== false });
-  if (document.body.dataset.layout === 'tabs') setTab('evidence');
-  if (document.body.dataset.layout === 'slide') el.evidenceRegion.hidden = false;
+  if (opts.open) setView('settlement');
 
   const row = rowById(id);
-  el.evidenceSubject.textContent = row ? `· ${row.name}, ${row.district}` : `· ${id}`;
-  el.btnEvidenceClose.hidden = false;
-  renderEvidenceBasis(row);
+  renderSettlementHead(row, id);
 
   S.detailLoading = true;
   S.detailError = null;
@@ -466,18 +845,46 @@ async function select(id, opts = {}) {
 
 function clearSelection() {
   S.selectedId = null; S.detail = null; S.detailId = null; S.detailError = null;
-  el.evidenceSubject.textContent = '';
-  el.btnEvidenceClose.hidden = true;
-  clear(el.evidenceBasis);
-  if (document.body.dataset.layout === 'slide') el.evidenceRegion.hidden = true;
+  renderSettlementHead(null, null);
   if (mapCtl) mapCtl.select(null, { fly: false });
   renderRank(true);
   renderEvidence();
 }
 
-function renderEvidenceBasis(row) {
-  clear(el.evidenceBasis);
-  if (row) el.evidenceBasis.append(coverageChip(row));
+/**
+ * The settlement room's header: the two figures that decide anything, large,
+ * plus the coverage chip that says what kind of silence this is. Statistics
+ * live below, in "why this ranks here".
+ */
+function renderSettlementHead(row, id) {
+  const tab = el.tabSettlement;
+  if (!row && !id) {
+    el.setName.textContent = 'Nothing selected';
+    el.setDistrict.textContent = 'Pick a settlement on the map or on the silence board.';
+    clear(el.setFacts);
+    if (tab) tab.lastChild.textContent = ' Settlement';
+    return;
+  }
+  el.setName.textContent = row ? (row.name || id) : id;
+  el.setDistrict.textContent = row
+    ? `${row.district || 'district not recorded'} · ${row.settlementId}`
+    : 'Not in the current ranking.';
+  if (tab) tab.lastChild.textContent = row && row.name ? ` Settlement · ${row.name}` : ' Settlement';
+
+  clear(el.setFacts);
+  if (!row) return;
+  const km = KINDS[silenceKind(row)];
+  const fact = (k, v, sub) => h('div', { class: 'set-fact' },
+    h('span', { class: 'k' }, k), h('span', { class: 'v' }, v),
+    sub ? h('span', { class: 'sub' }, sub) : null);
+  el.setFacts.append(
+    fact('Silent for', fmtDuration(row.silenceHours),
+      row.lastReportAt ? `since ${localFull(row.lastReportAt)}` : 'no report has ever resolved here'),
+    fact('People', fmtInt(row.population), 'population of record'),
+    h('div', { class: 'set-fact' },
+      h('span', { class: 'k' }, 'Coverage'),
+      h('span', { class: 'sub', style: 'margin-top:4px' }, coverageChip(row)),
+      h('span', { class: 'sub' }, km.word)));
 }
 
 function renderEvidence() {
@@ -486,13 +893,14 @@ function renderEvidence() {
 
   if (!S.selectedId) {
     box.append(emptyState('◇', 'Nothing selected',
-      'Pick a settlement from the rank list or the map to see every number behind its score.'));
+      'Pick a settlement from the silence board or the map to see every number behind its score, ' +
+      'the reports that reached us, and what we do not know.'));
     return;
   }
   const row = rowById(S.selectedId);
 
   if (S.detailError && S.detailError.kind === '404') {
-    box.append(h('div', { class: 'ev-grid' }, h('div', { class: 'ev-block ev-span' },
+    box.append(h('div', { class: 'ev' }, h('div', { class: 'ev-block' },
       h('h4', {}, 'No record'),
       h('p', { class: 'unknown' },
         h('strong', {}, `No record for "${S.detailError.id}".`),
@@ -505,7 +913,7 @@ function renderEvidence() {
     return;
   }
   if (S.detailError && S.detailError.kind === 'net') {
-    box.append(h('div', { class: 'ev-grid' }, h('div', { class: 'ev-block ev-span' },
+    box.append(h('div', { class: 'ev' }, h('div', { class: 'ev-block' },
       h('p', { class: 'unknown' },
         h('strong', {}, 'Could not load the evidence for this settlement.'),
         ' The ranking row below is the last state the console received.'),
@@ -516,18 +924,28 @@ function renderEvidence() {
   const d = S.detail || {};
   const ranked = d.ranked || row;
   const sb = d.scoreBreakdown || null;
-  const grid = h('div', { class: 'ev-grid' });
+  const grid = h('div', { class: 'ev' });
 
-  grid.append(observedBlock(ranked, d));
-  grid.append(mathBlock(ranked, sb));
+  // "What we do not know" comes first here, before any number that could be
+  // mistaken for a confirmation.
   grid.append(unknownBlock(ranked, d));
-  grid.append(reportsBlock(d));
+  grid.append(h('div', { class: 'ev-cols' }, observedBlock(ranked, d), reportsBlock(d)));
+
+  // The derivation is complete and unedited, but it is folded — it is the
+  // largest and least actionable block on the screen when it is open.
+  const math = mathBlock(ranked, sb);
+  math.classList.remove('ev-block');
+  math.querySelector('h4')?.remove();
+  grid.append(h('details', { class: 'why' },
+    h('summary', {}, 'Why this ranks here',
+      h('span', { class: 'hint' }, 'λ, surprisal, Gi* — computed server-side')),
+    h('div', { class: 'why-body' }, math)));
 
   const release = S.releases.get(S.selectedId);
   if (release) grid.append(releaseBlock(release));
 
   if (Array.isArray(d.neighbors) && d.neighbors.length) {
-    grid.append(h('div', { class: 'ev-block ev-span' },
+    grid.append(h('div', { class: 'ev-block' },
       h('h4', {}, 'Corridor neighbours'),
       h('div', { class: 'nb-chips' }, d.neighbors.map((nid) => {
         const nr = rowById(nid);
@@ -558,7 +976,142 @@ function observedBlock(r, d) {
   } else {
     blk.append(h('p', { class: 'method' }, 'Never — no report has ever resolved here.'));
   }
+  blk.append(emptyTail(r, d));
   return blk;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE EMPTY-TAIL TIMELINE
+// ══════════════════════════════════════════════════════════════════════════
+//
+// A report-arrival timeline where the data-ink is spent on the GAP. Every tick
+// is one report that resolved here, placed by its publishedAt. The stretch at
+// the end where no tick appears is drawn heavier and longer than any tick, and
+// it is captioned with its measured length — because an empty chart on its own
+// reads as "broken" or "not configured", and this one has to read as "measured,
+// and nothing arrived".
+//
+// Nothing here is computed beyond placing server timestamps on an axis. If the
+// reports have not loaded, it says so instead of drawing a plausible line.
+
+const TL = { w: 720, h: 86, x0: 10, x1: 710, axis: 44 };
+
+function emptyTail(r, d) {
+  const wrap = h('div', { class: 'tl' });
+  const sil = Number(r && r.silenceHours);
+  const haveReports = d && Array.isArray(d.reports);
+
+  if (!Number.isFinite(sil)) {
+    wrap.append(h('p', { class: 'tl-cap na' },
+      'No silence duration was returned for this settlement, so there is no timeline to draw.'));
+    return wrap;
+  }
+  if (!haveReports) {
+    wrap.append(h('p', { class: 'tl-cap na' },
+      'The reports behind this row have not loaded, so the arrival timeline is not drawn.'));
+    return wrap;
+  }
+
+  const now = Date.now();
+  const ages = d.reports
+    .map((rep) => (rep && rep.publishedAt ? (now - Date.parse(rep.publishedAt)) / 3600000 : NaN))
+    .filter((n) => Number.isFinite(n) && n >= 0)
+    .sort((a, b) => b - a);
+  const undated = d.reports.length - ages.length;
+
+  // The window has to hold the whole silence AND every report that reached us.
+  const windowH = Math.max(12, sil, ages.length ? ages[0] : 0) * 1.06;
+  const xOf = (ageH) => TL.x1 - (Math.min(ageH, windowH) / windowH) * (TL.x1 - TL.x0);
+
+  // The tail starts at the newest report, or at the very start of the window
+  // when nothing has ever arrived.
+  const tailStart = ages.length ? xOf(ages[ages.length - 1]) : TL.x0;
+  const kind = silenceKind(r);
+  const stop = silStop(sil);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'tl-svg');
+  svg.setAttribute('viewBox', `0 0 ${TL.w} ${TL.h}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.setAttribute('role', 'img');
+  svg.dataset.kind = kind;
+  svg.style.setProperty('--tlband', `var(--sil-${stop})`);
+  svg.setAttribute('aria-label',
+    `Report arrivals over the last ${fmtDuration(windowH)}. ` +
+    (ages.length
+      ? `${ages.length} report${ages.length === 1 ? '' : 's'} arrived, the most recent ${fmtDuration(sil)} ago, ` +
+        `followed by ${fmtDuration(sil)} with no arrival.`
+      : `No report arrived at any point in this window.`));
+
+  const add = (name, attrs) => {
+    const n = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    svg.append(n);
+    return n;
+  };
+
+  // The emptiness gets AREA, not just a line. A tick is one event; a gap is a
+  // duration, and a duration on a timeline is a region. This band is what makes
+  // the void the largest mark in the component.
+  add('rect', {
+    class: 'tl-void', x: tailStart, y: TL.axis - 22, width: Math.max(0, TL.x1 - tailStart), height: 44
+  });
+
+  // the axis
+  add('line', { class: 'tl-axis', x1: TL.x0, y1: TL.axis, x2: TL.x1, y2: TL.axis });
+
+  // the gap rule — the heaviest stroke on the drawing, with a bracket at each end
+  add('line', { class: 'tl-gap', x1: tailStart, y1: TL.axis, x2: TL.x1, y2: TL.axis });
+  add('line', { class: 'tl-gap-cap', x1: tailStart, y1: TL.axis - 20, x2: tailStart, y2: TL.axis + 20 });
+  add('line', { class: 'tl-gap-cap', x1: TL.x1, y1: TL.axis - 20, x2: TL.x1, y2: TL.axis + 20 });
+
+  // one hairline tick per report that resolved here
+  for (const age of ages) {
+    const x = xOf(age);
+    add('line', { class: 'tl-tick', x1: x, y1: TL.axis - 15, x2: x, y2: TL.axis + 1 });
+  }
+
+  // "now" is the right-hand edge and is labelled as such
+  const nowT = add('text', { class: 'tl-lab', x: TL.x1, y: TL.axis + 36, 'text-anchor': 'end' });
+  nowT.textContent = 'now';
+  const startT = add('text', { class: 'tl-lab', x: TL.x0, y: TL.axis + 36, 'text-anchor': 'start' });
+  startT.textContent = `${fmtDuration(windowH)} ago`;
+  // The measured length of the void, written inside the void — but only when it
+  // actually fits inside it. A caption that overflows its own gap would be
+  // making the gap look wider than the measurement it is labelling.
+  const gapW = TL.x1 - tailStart;
+  const inner = fmtDuration(sil);
+  if (gapW > inner.length * 10.4 + 26) {
+    const t = add('text', {
+      class: 'tl-inner', x: (tailStart + TL.x1) / 2, y: TL.axis - 28, 'text-anchor': 'middle'
+    });
+    t.textContent = inner;
+  }
+
+  wrap.append(svg);
+
+  // The measured length of the emptiness, stated. This is the whole point of
+  // the component: the void is a quantity, not a rendering accident.
+  const cap = h('p', { class: `tl-cap tl-kind-${kind}` });
+  if (kind === 'never') {
+    cap.append(h('b', {}, `${fmtDuration(sil)} with no tick. `),
+      'No report has ever resolved here, so there is nothing on this line at all. ' +
+      'That is an absence of data, not a confirmed silence.');
+  } else if (kind === 'stopped') {
+    cap.append(h('b', {}, `${fmtDuration(sil)} with no tick. `),
+      `${fmtCount(ages.length)} report${ages.length === 1 ? '' : 's'} resolved here, the last on ` +
+      `${r.lastReportAt ? localFull(r.lastReportAt) : 'a date the server did not record'}, and nothing since. ` +
+      'Coverage existed and then ceased.');
+  } else {
+    cap.append(h('b', {}, `Last arrival ${fmtDuration(sil)} ago. `),
+      `${fmtCount(ages.length)} report${ages.length === 1 ? '' : 's'} resolved here. This settlement is still being heard from.`);
+  }
+  wrap.append(cap);
+  if (undated > 0) {
+    wrap.append(h('p', { class: 'tl-cap na' },
+      `${undated} report${undated === 1 ? ' has' : 's have'} no publish time on record and could not be placed on this line.`));
+  }
+  return wrap;
 }
 
 function mathBlock(r, sb) {
@@ -668,7 +1221,7 @@ function reportsBlock(d) {
 }
 
 function releaseBlock(rel) {
-  const blk = h('div', { class: 'ev-block ev-span' },
+  const blk = h('div', { class: 'ev-block' },
     h('h4', {}, `Released to inform — approved by ${rel.approvedBy}`));
   blk.append(shortlistTable(rel.shortlist));
   return blk;
@@ -705,46 +1258,69 @@ function renderCheckpoint(force) {
   const pend = pendingItems();
   const done = decidedItems();
 
-  el.cpCount.textContent = String(pend.length);
-  el.checkpointHead.classList.toggle('has-pending', pend.length > 0);
+  // The lead line for this room, built from live counts.
+  clear(el.cpLeadLine);
+  if (!S.state) {
+    el.cpLeadLine.append('Waiting for the first state…');
+  } else if (pend.length) {
+    el.cpLeadLine.append(h('span', { class: 'n' }, String(pend.length)),
+      ` decision${pend.length === 1 ? '' : 's'} ${pend.length === 1 ? 'is' : 'are'} waiting on a named human.`);
+  } else {
+    el.cpLeadLine.append('No decisions are pending.');
+  }
 
   const sig = JSON.stringify([!!S.state, S.showAllDecided, minuteBucket(),
     pend.map((i) => [i.id, i.kind, i.title, i.settlementId, i.createdAt]),
     done.map((i) => [i.id, i.status, i.approvedBy, i.decidedAt])]);
   if (!force && sig === cpSig) return;
+  const firstPaint = cpSig === '';
   cpSig = sig;
 
   clear(box);
-  if (!S.state) { box.append(skeletonRows(2)); return; }
+  if (!S.state) { box.append(skeletonRows(3)); return; }
 
   box.append(h('div', { class: 'cp-sub' }, `Waiting on a human — ${pend.length}`));
   if (!pend.length) {
-    box.append(emptyStateOk('✓', 'No decisions pending',
-      "Escalations appear here when a settlement's silence clears the escalation gate. Nothing becomes actionable until a named human signs for it."));
+    box.append(emptyStateOk('✓', 'Nothing is waiting on a human',
+      "Escalations appear here when a settlement's silence clears the escalation gate. " +
+      'Nothing becomes actionable until a named human signs for it, and that name cannot be edited afterwards.'));
   } else {
-    for (const item of pend.slice().sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))) {
+    // One ruled surface ordered by the server's own rank — not N equal cards.
+    const ordered = pend.slice().sort((a, b) => {
+      const ra = rowById(a.settlementId), rb = rowById(b.settlementId);
+      const na = Number(ra && ra.rank), nb = Number(rb && rb.rank);
+      if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+      return Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0);
+    });
+    const step = staggerStep(ordered.length);
+    const animate = firstPaint && !reducedMotion();
+    ordered.forEach((item, i) => {
       const amb = item.kind === 'ambiguous-match';
-      box.append(h('article', { class: `cp-card${amb ? ' k-ambiguous' : ''}` },
-        h('div', { class: 'cp-kind' },
-          h('span', { 'aria-hidden': 'true' }, amb ? '◆ ' : '▲ '),
-          amb ? 'AMBIGUOUS MATCH' : 'ESCALATION'),
-        h('p', { class: 'cp-title' }, item.title || '(no title recorded)'),
-        h('p', { class: 'cp-meta' },
-          `${item.settlementId || '—'} · raised ${relTime(item.createdAt) || 'time not recorded'}`),
-        h('button', {
-          class: 'btn btn-block btn-warn cp-open', type: 'button', 'data-cp': item.id,
-          onclick: () => openModal(item.id)
-        }, 'Review & decide →')));
-    }
+      const row = item.settlementId ? rowById(item.settlementId) : null;
+      const btn = h('button', {
+        class: `cp-row${animate ? ' enter' : ''}`, type: 'button', 'data-cp': item.id,
+        onclick: () => openModal(item.id)
+      },
+        h('span', { class: 'idx' }, row && row.rank !== undefined ? `#${row.rank}` : String(i + 1)),
+        h('span', {},
+          h('span', { class: 't' }, item.title || '(no title recorded)'),
+          h('span', { class: 'm' },
+            h('span', { class: 'kind' }, amb ? '◆ AMBIGUOUS MATCH' : '▮ ESCALATION'),
+            ` · ${row ? `${row.name}, ${row.district}` : (item.settlementId || 'no settlement resolved')}` +
+            ` · raised ${relTime(item.createdAt) || 'time not recorded'}`)),
+        h('span', { class: 'go' }, 'Review and decide →'));
+      if (animate) { btn.style.setProperty('--i', String(i)); btn.style.setProperty('--stg', `${step}ms`); }
+      box.append(btn);
+    });
   }
 
   box.append(h('div', { class: 'cp-sub' }, `Decided — ${done.length}`));
   if (!done.length) {
-    box.append(h('p', { class: 'helper', style: 'padding:6px 12px' }, 'No decisions recorded yet'));
+    box.append(h('p', { class: 'helper', style: 'padding:8px 16px' }, 'No decisions recorded yet.'));
     return;
   }
   const ordered = done.slice().sort((a, b) => Date.parse(b.decidedAt || 0) - Date.parse(a.decidedAt || 0));
-  const shown = S.showAllDecided ? ordered : ordered.slice(0, 5);
+  const shown = S.showAllDecided ? ordered : ordered.slice(0, 8);
   for (const item of shown) {
     const ok = item.status === 'approved';
     box.append(h('button', {
@@ -755,36 +1331,35 @@ function renderCheckpoint(force) {
         h('span', { 'aria-hidden': 'true' }, ok ? '✓ ' : '✕ '),
         `${ok ? 'Approved' : 'Rejected'} by ${item.approvedBy || 'name not recorded'}`),
       h('span', { class: 't' }, item.title || '(no title recorded)'),
-      h('span', { class: 'when', title: item.decidedAt || '' }, relTime(item.decidedAt) || 'time not recorded')));
+      h('span', { class: 'when', title: item.decidedAt || '' },
+        relTime(item.decidedAt) || 'time not recorded')));
   }
   if (ordered.length > shown.length) {
     box.append(h('button', {
-      class: 'btn btn-sm', type: 'button', style: 'margin:8px 12px',
+      class: 'btn btn-sm', type: 'button', style: 'margin:8px 16px',
       onclick: () => { S.showAllDecided = true; renderCheckpoint(true); }
-    }, `Show all ${ordered.length}`));
+    }, `Show all ${ordered.length} decided`));
   }
 }
 
 function renderCheckpointBar() {
   const n = pendingItems().length;
-  el.cbar.classList.toggle('pending', n > 0);
+  el.statusbar.classList.toggle('pending', n > 0);
   clear(el.cbarText);
   if (n > 0) {
-    el.cbarText.append(
-      h('strong', {}, `${n} decision${n === 1 ? '' : 's'} waiting on a named human.`),
-      ' Nothing in Signal Zero becomes actionable until someone signs for it.');
+    el.cbarText.append(`${n} waiting on a named human`);
     el.cbarAction.hidden = false;
   } else {
-    el.cbarText.append('No decisions pending. Everything raised so far has been signed for.');
+    el.cbarText.append('Nothing waiting on a human');
     el.cbarAction.hidden = true;
   }
 }
 
 function focusQueue() {
-  el.checkpointRegion.scrollIntoView({ block: 'nearest' });
-  if (document.body.dataset.layout === 'tabs') setTab('checkpoint');
-  const first = $('.cp-open', el.checkpointBody);
+  setView('decisions');
+  const first = $('.cp-row', el.checkpointBody);
   if (first) first.focus();
+  else el.viewDecisions.focus();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -810,11 +1385,16 @@ function renderActivity(force) {
   else if (S.actFilter === 'decisions') items = items.filter((i) => /approved by|rejected by/i.test(i.message || ''));
   else if (S.actFilter === 'pipeline') items = items.filter((i) => i._src === 'local' || i.kind === 'degraded-source');
 
+  const totalMatched = items.length;
   items = items.slice(0, 80);
-  const sig = JSON.stringify([S.actFilter, items.map((i) => i.id || i.at + i.message)]);
+  const sig = JSON.stringify([S.actFilter, totalMatched, items.map((i) => i.id || i.at + i.message)]);
   if (!force && sig === actSig) return;
   actSig = sig;
   clear(list);
+
+  el.actCount.textContent = totalMatched
+    ? (totalMatched > items.length ? `showing ${items.length} of ${totalMatched}` : `${totalMatched} entries`)
+    : '';
 
   if (!items.length) {
     list.append(h('li', { style: 'display:block' }, emptyState('·', 'No activity yet',
@@ -835,10 +1415,14 @@ function renderActivity(force) {
           ? h('span', { class: 'chip chip-sim', style: 'margin-left:6px' }, 'SIMULATED') : null));
     if (item.detail && Object.keys(item.detail).length) {
       const det = h('details', {}, h('summary', {}, 'detail'),
-        h('pre', {}, JSON.stringify(item.detail, null, 2)));
+        h('pre', { class: 'raw' }, JSON.stringify(item.detail, null, 2)));
       li.append(det);
     }
     list.append(li);
+  }
+  if (totalMatched > items.length) {
+    list.append(h('li', { class: 'overflow-note', style: 'display:block' },
+      `${totalMatched - items.length} older entries are not shown. The full record is in the API response.`));
   }
 }
 
@@ -852,7 +1436,10 @@ function renderSources() {
   if (!S.state) {
     if (srcSig !== 'skel') {
       srcSig = 'skel'; clear(box); clear(el.sourceAgg);
-      for (let i = 0; i < 4; i++) box.append(h('span', { class: 'src skel', style: 'width:120px;height:20px' }));
+      for (let i = 0; i < 4; i++) {
+        box.append(h('span', { class: 'skel', style: 'height:16px;margin:5px 0' }));
+      }
+      el.sbSources.textContent = '';
     }
     return;
   }
@@ -866,9 +1453,13 @@ function renderSources() {
   clear(el.sourceAgg);
   if (!list.length) {
     const anyReports = Number(S.state.stats.reportCount) > 0;
-    box.append(h('span', { class: 'src s-degraded' },
+    box.append(h('div', { class: 'src s-degraded' },
       h('span', { class: 'dot', 'aria-hidden': 'true' }, '▲'),
-      anyReports ? 'Sources not reported by this run' : 'No sources registered yet — run the pipeline.'));
+      h('span', { class: 'nm' }, anyReports
+        ? 'Sources not reported by this run'
+        : 'No sources registered yet — run the pipeline.'),
+      h('span', { class: 'st' }, 'unknown')));
+    el.sbSources.textContent = 'sources not reported';
     return;
   }
   let live = 0, latest = null;
@@ -876,15 +1467,18 @@ function renderSources() {
     const st = statusOf(s.status);
     if (s.status === 'live' || s.status === 'ok') live++;
     if (s.lastFetchAt && (!latest || Date.parse(s.lastFetchAt) > Date.parse(latest))) latest = s.lastFetchAt;
-    box.append(h('span', {
+    box.append(h('div', {
       class: `src ${st.cls}`,
       title: s.lastFetchAt ? `last fetch ${s.lastFetchAt}` : 'no fetch recorded'
     },
       h('span', { class: 'dot', 'aria-hidden': 'true' }, st.glyph),
-      `${s.name} · ${s.sourceType || 'type not recorded'}`,
-      h('span', { class: 'vh' }, ` status ${s.status || 'unknown'}`)));
+      h('span', { class: 'nm' }, s.name || 'unnamed source',
+        h('span', { class: 'ty' }, ` · ${s.sourceType || 'type not recorded'}`)),
+      h('span', { class: 'st' }, s.status || 'unknown')));
   }
-  el.sourceAgg.textContent = `${live}/${list.length} live · last fetch ${latest ? (relTime(latest) || '—') : 'not recorded'}`;
+  el.sourceAgg.textContent =
+    `${live} of ${list.length} live · last fetch ${latest ? (relTime(latest) || '—') : 'not recorded'}`;
+  el.sbSources.textContent = `${live}/${list.length} sources live`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -941,6 +1535,7 @@ function swapModal(item, readOnly) {
   modal.detail = null;
   modal.breakdown = null;
   modal.detailPending = false;
+  modal.cued = false;
   renderModal();
   modal.dlg.focus();
 }
@@ -1018,17 +1613,11 @@ function renderModal() {
   const row = item.settlementId ? rowById(item.settlementId) : null;
   const src = { ...ev, ...(row || {}) };
 
-  body.append(h('section', {}, h('h4', {}, 'What we observed'), observedKv(src, ev)));
-
-  body.append(h('section', {}, h('h4', {}, 'How the number was reached'),
-    (() => {
-      const inner = mathBlock(row || evAsRow(ev), modal.breakdown || null);
-      inner.classList.remove('ev-block');
-      inner.querySelector('h4')?.remove();
-      return inner;
-    })()));
-
+  // Reading order teaches priority: the limits of the evidence come before the
+  // confidence-inspiring numbers, and the derivation comes last, folded.
   body.append(h('section', {}, h('h4', {}, 'What we do not know'), unknownParagraph(item, src)));
+
+  body.append(h('section', {}, h('h4', {}, 'What we observed'), observedKv(src, ev)));
 
   if (amb) {
     body.append(h('section', {}, h('h4', {}, 'The two candidates'), candidatesBlock(ev)));
@@ -1047,6 +1636,16 @@ function renderModal() {
     body.append(sec);
   }
 
+  body.append(h('details', { class: 'why' },
+    h('summary', {}, 'How the number was reached',
+      h('span', { class: 'hint' }, 'λ, surprisal, Gi* — computed server-side')),
+    h('div', { class: 'why-body' }, (() => {
+      const inner = mathBlock(row || evAsRow(ev), modal.breakdown || null);
+      inner.classList.remove('ev-block');
+      inner.querySelector('h4')?.remove();
+      return inner;
+    })())));
+
   body.append(h('details', {},
     h('summary', {}, 'Show the exact evidence the server holds'),
     h('pre', { class: 'raw' }, JSON.stringify(item, null, 2))));
@@ -1055,7 +1654,14 @@ function renderModal() {
   dlg.append(body);
 
   // ── footer ──
-  dlg.append(ro || modal.decided ? decidedFooter() : decisionFooter());
+  const signing = !(ro || modal.decided);
+  dlg.append(signing ? decisionFooter() : decidedFooter());
+  // Once per opened item, not once per re-render — the detail fetch re-renders
+  // this dialog and a cue that repeated on every poll would be a nag, not a cue.
+  if (signing && !modal.cued) {
+    modal.cued = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => cueSignNote()));
+  }
 
   if (!modal.detail && item.settlementId && !modal.detailPending) {
     modal.detailPending = true;
@@ -1193,18 +1799,31 @@ function decisionFooter() {
   const help = h('p', { class: 'helper', id: 'approver-help' }, HELPER_DEFAULT);
   const announce = h('p', { class: 'vh', 'aria-live': 'polite' });
 
+  // Both buttons are described by the uncertainty statement itself, so a screen
+  // reader hears the limits of the evidence as part of the control it is about
+  // to operate — the non-visual form of "on screen at the moment of signing".
   const reject = h('button', {
-    class: 'btn btn-reject', type: 'button', 'aria-disabled': 'true'
+    class: 'btn btn-reject', type: 'button', 'aria-disabled': 'true',
+    'aria-describedby': 'sign-caveat'
   }, h('span', { 'aria-hidden': 'true' }, '✕'), 'Reject — not actionable');
   const approve = h('button', {
-    class: 'btn btn-approve', type: 'button', 'aria-disabled': 'true'
+    class: 'btn btn-approve', type: 'button', 'aria-disabled': 'true',
+    'aria-describedby': 'sign-caveat'
   }, h('span', { 'aria-hidden': 'true' }, '✓'), 'Approve — release shortlist');
 
   let wasEnabled = false;
   const sync = () => {
     const on = input.value.trim().length > 0;
     for (const b of [reject, approve]) b.setAttribute('aria-disabled', String(!on));
-    if (on && !wasEnabled) { announce.textContent = 'Approve and reject are now available.'; wasEnabled = true; }
+    if (on && !wasEnabled) {
+      announce.textContent = 'Approve and reject are now available.';
+      wasEnabled = true;
+      // This is the moment of signing. Pull the eye back to what we do not know
+      // — once, slowly, with no bounce — and then LEAVE it emphasised. From here
+      // on a click is irreversible, so the caveat stays raised until the dialog
+      // closes rather than settling back down.
+      cueSignNote({ persist: true });
+    }
     if (!on) wasEnabled = false;
   };
   input.addEventListener('input', sync);
@@ -1305,10 +1924,48 @@ function decisionFooter() {
   reject.addEventListener('click', () => submit('reject', reject));
   approve.addEventListener('click', () => submit('approve', approve));
 
+  // Hard rule: the uncertainty statement must be on screen AT THE MOMENT OF
+  // SIGNING, not 300px above the fold in a scrolling body. It is repeated here,
+  // in the signing panel itself, alongside the gate.
+  const ev = modal.item.evidence || {};
+  const row = modal.item.settlementId ? rowById(modal.item.settlementId) : null;
+  const src = { ...ev, ...(row || {}) };
+  const caveat = h('p', { class: 'sign-note', id: 'sign-caveat', tabindex: '-1' },
+    h('b', {}, 'Before you sign: '), unknownParagraph(modal.item, src).textContent);
+
+  const gate = h('p', { class: 'gate' },
+    'Both buttons stay unavailable until you type your name. Approve and reject carry equal weight.');
+
+  // The rail is the choreography: a single 3px rule draws down the left edge of
+  // the signing panel and stops at the caveat. It moves once, on a hard
+  // ease-in-out with no overshoot, and it never repeats on its own.
   return h('div', { class: 'dlg-foot' },
+    h('span', { class: 'sign-rail', 'aria-hidden': 'true' }),
+    caveat, gate,
     h('label', { for: 'approver' }, 'Your name (required, recorded permanently)'),
     input, help, announce,
     h('div', { class: 'dlg-actions' }, reject, approve));
+}
+
+/**
+ * One deliberate, un-bouncy emphasis on the uncertainty statement. Fired when
+ * the signing panel first appears, and again at the moment the typed name arms
+ * the two buttons. Under reduced motion the emphasised state is simply the
+ * resting state — see .sign-note in the stylesheet — so nothing is lost.
+ */
+let signCue = null;
+function cueSignNote({ persist = false } = {}) {
+  if (!modal) return;
+  const note = modal.dlg.querySelector('.sign-note');
+  if (!note) return;
+  clearTimeout(signCue);
+  if (persist) { note.classList.add('is-cued'); return; }
+  if (reducedMotion()) return;   // already permanently emphasised by the stylesheet
+  note.classList.remove('is-cued');
+  // Force a reflow so the class can be re-applied and re-run in the same frame.
+  void note.offsetWidth;
+  note.classList.add('is-cued');
+  signCue = setTimeout(() => note.classList.remove('is-cued'), 1400);
 }
 
 function successBlock() {
@@ -1365,26 +2022,57 @@ function applyTheme(mode) {
   else document.documentElement.setAttribute('data-theme', mode);
   for (const b of $$('[data-theme-set]')) b.setAttribute('aria-pressed', String(b.dataset.themeSet === mode));
   safeLocal('sz-theme', mode);
+  // The sky belongs to the theme; MapLibre paints it and cannot see a CSS token.
+  if (mapCtl && mapCtl.refreshAtmosphere) mapCtl.refreshAtmosphere();
 }
 
-function setTab(name) {
-  document.body.dataset.tab = name;
-  for (const b of $$('#tabbar [role="tab"]')) {
-    const on = b.dataset.tab === name;
-    b.setAttribute('aria-selected', String(on));
-    b.tabIndex = on ? 0 : -1;
+// ── views ──────────────────────────────────────────────────────────────────
+// Four rooms, real ARIA tabs, and the selected panel written to the URL hash
+// so any view is linkable. Unknown hashes are left alone so the skip links
+// (#region-rank, #region-checkpoint, #region-map) keep working as anchors.
+
+const VIEWS = ['overview', 'decisions', 'settlement', 'activity'];
+// Which room owns each skip-link anchor.
+const ANCHOR_VIEW = {
+  'region-rank': 'overview', 'region-map': 'overview',
+  'region-checkpoint': 'decisions', 'region-evidence': 'settlement',
+  'region-activity': 'activity', 'region-sources': 'activity'
+};
+
+function setView(name, opts = {}) {
+  if (!VIEWS.includes(name)) return;
+  const changed = document.body.dataset.view !== name;
+  document.body.dataset.view = name;
+
+  for (const tab of $$('#viewnav [role="tab"]')) {
+    const on = tab.dataset.view === name;
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
   }
+  for (const v of VIEWS) {
+    const panel = $(`#view-${v}`);
+    if (!panel) continue;
+    panel.classList.toggle('is-active', v === name);
+    panel.hidden = v !== name;
+  }
+  if (opts.focusPanel) { const p = $(`#view-${name}`); if (p) p.focus(); }
+
+  const hash = `#v/${name}`;
+  if (!opts.fromHash && location.hash !== hash) {
+    try { history.replaceState(null, '', hash); } catch { location.hash = hash; }
+  }
+  // MapLibre measures its canvas on resize; a pane that was display:none has
+  // no size until the frame after it is shown.
+  if (changed && name === 'overview' && mapCtl) setTimeout(() => mapCtl.resize(), 60);
+}
+
+function viewFromHash() {
+  const m = /^#v\/([a-z]+)$/.exec(location.hash || '');
+  return m && VIEWS.includes(m[1]) ? m[1] : null;
 }
 
 function syncLayout() {
-  const w = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0) || 1440;
-  const layout = w <= 1023 ? 'tabs' : (w <= 1279 ? 'slide' : 'wide');
-  const prev = document.body.dataset.layout;
-  document.body.dataset.layout = layout;
-  el.tabbar.hidden = layout !== 'tabs';
-  if (layout === 'slide') el.evidenceRegion.hidden = !S.selectedId;
-  else el.evidenceRegion.hidden = false;
-  if (layout !== prev && mapCtl) setTimeout(() => mapCtl.resize(), 60);
+  if (mapCtl) setTimeout(() => mapCtl.resize(), 60);
   syncLegend();
 }
 
@@ -1421,13 +2109,39 @@ function renderLegend() {
     dot.dataset.anom = key;
     rings.append(h('li', {}, h('span', { class: 'swwrap' }, dot), a.label === '—' ? a.short : a.label));
   }
+  renderRingLegend();
+}
+
+/**
+ * The ring is the map's primary read, so it gets the first legend block. Each
+ * swatch is the real component the map draws, not a picture of it, so the legend
+ * cannot drift away from the encoding.
+ */
+function renderRingLegend() {
+  const body = $('#legend .legend-body');
+  if (!body || $('#legend-cadence')) return;
+  const swatch = (kind) => {
+    const wrap = h('span', { class: 'lg-ring', 'aria-hidden': 'true' });
+    wrap.dataset.kind = kind;
+    wrap.append(h('i', {}));
+    return wrap;
+  };
+  const block = h('div', { class: 'legend-block', id: 'legend-cadence' },
+    h('span', { class: 'legend-title' }, 'Reporting cadence'),
+    h('ul', { class: 'legend-rings lg-cad' },
+      h('li', {}, swatch('recent'), 'a full ring — reports still arriving, one cycle per expected interval'),
+      h('li', {}, swatch('stopped'), 'a broken arc with a notch — reports arrived, then stopped mid-cycle'),
+      h('li', {}, swatch('never'), 'a dashed ghost — no report has ever arrived, so no cycle ever started')),
+    h('p', { class: 'legend-cap' },
+      'Each ring runs at that settlement’s own fitted interval (1/λ), compressed for display. ' +
+      'The dark spreading around a marker grows with how long nothing has arrived.'));
+  body.insertBefore(block, body.firstChild);
 }
 
 function bind() {
   el.btnRun.addEventListener('click', runPipeline);
-  el.pendingPill.addEventListener('click', focusQueue);
   el.cbarAction.addEventListener('click', focusQueue);
-  el.btnEvidenceClose.addEventListener('click', clearSelection);
+  el.humanBandGo.addEventListener('click', focusQueue);
 
   for (const b of $$('[data-theme-set]')) b.addEventListener('click', () => applyTheme(b.dataset.themeSet));
   for (const b of $$('[data-filt]')) b.addEventListener('click', () => { S.filter = b.dataset.filt; syncFilterButtons(); renderRank(true); });
@@ -1466,17 +2180,41 @@ function bind() {
     });
   }
 
-  for (const t of $$('#tabbar [role="tab"]')) {
-    t.addEventListener('click', () => setTab(t.dataset.tab));
+  // Real ARIA tab semantics: arrows move, Home/End jump, the panel follows.
+  const tabs = $$('#viewnav [role="tab"]');
+  for (const t of tabs) {
+    t.addEventListener('click', () => setView(t.dataset.view));
     t.addEventListener('keydown', (e) => {
-      const tabs = $$('#tabbar [role="tab"]');
       const i = tabs.indexOf(t);
       let next = null;
-      if (e.key === 'ArrowRight') next = tabs[(i + 1) % tabs.length];
-      if (e.key === 'ArrowLeft') next = tabs[(i - 1 + tabs.length) % tabs.length];
-      if (e.key === 'Home') next = tabs[0];
-      if (e.key === 'End') next = tabs[tabs.length - 1];
-      if (next) { e.preventDefault(); setTab(next.dataset.tab); next.focus(); }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(i + 1) % tabs.length];
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(i - 1 + tabs.length) % tabs.length];
+      else if (e.key === 'Home') next = tabs[0];
+      else if (e.key === 'End') next = tabs[tabs.length - 1];
+      if (next) { e.preventDefault(); setView(next.dataset.view); next.focus(); }
+    });
+  }
+
+  // A linkable view: #v/decisions restores that panel on load and on Back.
+  window.addEventListener('hashchange', () => {
+    const v = viewFromHash();
+    if (v) setView(v, { fromHash: true });
+  });
+
+  // The skip links stay real anchors; they just open the room that owns them.
+  for (const a of $$('a.skip')) {
+    a.addEventListener('click', (e) => {
+      const id = (a.getAttribute('href') || '').slice(1);
+      const view = ANCHOR_VIEW[id];
+      if (!view) return;
+      e.preventDefault();
+      setView(view);
+      const target = document.getElementById(id);
+      if (target) {
+        target.setAttribute('tabindex', '-1');
+        target.focus();
+        target.scrollIntoView({ block: 'nearest' });
+      }
     });
   }
 
@@ -1490,20 +2228,23 @@ function bind() {
     if (modal) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.key >= '1' && e.key <= '4') { setView(VIEWS[Number(e.key) - 1]); return; }
     if (e.key === 'r') { if (mapCtl) mapCtl.resetView(); }
-    else if (e.key === '/') { e.preventDefault(); el.rankFilter.focus(); }
+    else if (e.key === '/') { e.preventDefault(); setView('overview'); el.rankFilter.focus(); }
   });
 }
 
 function renderAll() {
-  renderRail();
-  renderStats();
+  renderFinding();
+  renderHumanBand();
+  renderStages();
+  renderPassKv();
   renderRank();
   renderCheckpoint();
   renderCheckpointBar();
   renderActivity();
   renderSources();
-  if (S.selectedId) renderEvidenceBasis(rowById(S.selectedId));
+  if (S.selectedId) renderSettlementHead(rowById(S.selectedId), S.selectedId);
   if (mapCtl) {
     const pend = pendingSettlementIds();
     const sig = JSON.stringify(rows().map((r) =>
@@ -1511,35 +2252,67 @@ function renderAll() {
     if (sig !== mapSig) { mapSig = sig; mapCtl.setData(rows(), S.adjacency || {}); }
     mapCtl.setPending(pend);
     if (S.selectedId) mapCtl.select(S.selectedId, { fly: false });
+    syncMapStaleness();
   }
+}
+
+/**
+ * The map's fog is driven by how long it has been since the last COMPLETE
+ * pipeline pass — the console's own silence, measured the same way a
+ * settlement's is. Nothing about the ranking changes with it; only how clearly
+ * the ground behind the ranking can be seen.
+ */
+function syncMapStaleness() {
+  if (!mapCtl || !mapCtl.setStaleness) return;
+  const last = S.state && S.state.stats && S.state.stats.lastRunAt;
+  const t = last ? Date.parse(last) : NaN;
+  // No completed pass yet, or the API itself is unreachable: that is the most
+  // stale the console can be, and it says so rather than looking fresh.
+  if (!Number.isFinite(t)) { mapCtl.setStaleness(S.state ? 6 : 0); return; }
+  mapCtl.setStaleness(Math.max(0, (Date.now() - t) / 3600000));
 }
 
 function boot() {
   Object.assign(el, {
-    apiBanner: $('#api-banner'), railTrack: $('#rail-track'), railSub: $('#rail-sub'),
-    railAnnounce: $('#rail-announce'), statReports: $('#stat-reports'), statClusters: $('#stat-clusters'),
-    statLastRun: $('#stat-lastrun'), pendingPill: $('#pending-pill'), pendingPillN: $('#pending-pill-n'),
-    btnRun: $('#btn-run'), rankRows: $('#rank-rows'), rankTable: $('#rank-table'), rankEmpty: $('#rank-empty'),
-    rankCount: $('#rank-count'), rankFilter: $('#rank-filter'),
-    evidenceBody: $('#evidence-body'), evidenceSubject: $('#evidence-subject'), evidenceBasis: $('#evidence-basis'),
-    evidenceRegion: $('#region-evidence'), btnEvidenceClose: $('#btn-evidence-close'),
-    checkpointBody: $('#checkpoint-body'), checkpointHead: $('#checkpoint-head'),
-    checkpointRegion: $('#region-checkpoint'), cpCount: $('#cp-count'),
-    activityList: $('#activity-list'), sourceChips: $('#source-chips'), sourceAgg: $('#source-agg'),
-    cbar: $('#checkpoint-bar'), cbarText: $('#cbar-text'), cbarAction: $('#cbar-action'),
-    toasts: $('#toasts'), modalRoot: $('#modal-root'), tabbar: $('#tabbar')
+    apiBanner: $('#api-banner'),
+    // finding
+    finding: $('#finding'), findingB: $('#finding-b'), findingNote: $('#finding-note'),
+    findingLive: $('#finding-live'), humanBandGlyph: $('#human-band .hb-glyph'),
+    humanBand: $('#human-band'), humanBandText: $('#human-band-text'), humanBandGo: $('#human-band-go'),
+    navBadge: $('#nav-badge'), tabSettlement: $('#tab-settlement'),
+    // board
+    btnRun: $('#btn-run'), rankRows: $('#rank-rows'), rankTable: $('#rank-table'),
+    rankEmpty: $('#rank-empty'), rankCount: $('#rank-count'), rankFilter: $('#rank-filter'),
+    boardFoot: $('#board-foot'),
+    // settlement
+    setName: $('#set-name'), setDistrict: $('#set-district'), setFacts: $('#set-facts'),
+    evidenceBody: $('#evidence-body'),
+    // decisions
+    checkpointBody: $('#checkpoint-body'), cpLeadLine: $('#cp-lead-line'),
+    viewDecisions: $('#view-decisions'),
+    // activity
+    activityList: $('#activity-list'), actCount: $('#act-count'), stageList: $('#stage-list'),
+    railSub: $('#rail-sub'), railAnnounce: $('#rail-announce'),
+    sourceChips: $('#source-chips'), sourceAgg: $('#source-agg'), passKv: $('#pass-kv'),
+    // status bar
+    statusbar: $('#statusbar'), sbTrack: $('#sb-track'), sbText: $('#sb-text'),
+    sbSources: $('#sb-sources'), cbarText: $('#cbar-text'), cbarAction: $('#cbar-action'),
+    toasts: $('#toasts'), modalRoot: $('#modal-root')
   });
 
   applyTheme(safeLocal('sz-theme') || 'auto');
-  syncLayout();
+  setView(viewFromHash() || 'overview');
   syncFilterButtons();
   renderLegend();
   bind();
   syncLegend();
 
-  // Shell + skeletons paint before anything touches the network.
-  renderRail(); renderStats(); renderRank(); renderCheckpoint();
-  renderCheckpointBar(); renderActivity(); renderSources(); renderEvidence();
+  // Shell + skeletons paint before anything touches the network. The first
+  // ~40 seconds after a cold boot genuinely has zero settlements, so these
+  // loading states are the real screen, not a hypothetical one.
+  renderFinding(); renderHumanBand(); renderStages(); renderPassKv();
+  renderRank(); renderCheckpoint(); renderCheckpointBar();
+  renderActivity(); renderSources(); renderSettlementHead(null, null); renderEvidence();
 
   try {
     mapCtl = createMapController({
@@ -1572,7 +2345,12 @@ function boot() {
     .catch((err) => logLocal(`Corridor adjacency could not be loaded (${err.message}). The map shows settlements without the corridor lines.`));
 
   pollState().finally(loopPoll);
-  setInterval(() => { renderStats(); renderCheckpoint(); renderSources(); if (!S.running) renderRail(); }, 15000);
+  // Relative timestamps have to keep ticking even when the payload does not.
+  setInterval(() => {
+    renderFinding(); renderCheckpoint(); renderSources();
+    syncMapStaleness();
+    if (!S.running) renderStages();
+  }, 15000);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

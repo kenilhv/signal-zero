@@ -10,6 +10,11 @@ export const store = {
   checkpoint: [],
   incidents: [],
   sources: {},
+  // TrueForge agent-harness telemetry for the last pipeline pass. Written by
+  // triage tier 3 (the only stage that uses the harness) and read verbatim by
+  // GET /api/state. Counters here are the ONLY thing the UI may use to claim a
+  // classification was executed by the harness rather than by the fallback.
+  harness: null,
   stats: {}
 };
 
@@ -19,7 +24,7 @@ let incidentSeq = 0;
 
 /**
  * Push an IncidentEvent onto the fail feed and return it.
- * kind: 'degraded-source' | 'llm-fallback' | 'cold-start' | 'heal'
+ * kind: 'degraded-source' | 'llm-fallback' | 'cold-start' | 'heal' | 'agent-refusal'
  */
 export function addIncident(kind, message, detail = {}) {
   const event = {

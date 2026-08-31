@@ -270,13 +270,74 @@ export async function runPipeline() {
       lastRunAt: new Date().toISOString(),
       durationMs,
       rankedCount: store.ranked.length,
-      pendingCheckpointCount: store.checkpoint.filter((i) => i.status === 'pending').length
+      pendingCheckpointCount: store.checkpoint.filter((i) => i.status === 'pending').length,
+      // Tier-3 provenance, counted - never asserted. `harness` is the number of
+      // classifications TrueForge actually executed as session turns this pass;
+      // `fallback` is the number the direct-fetch path had to cover. Both are
+      // read straight off store.harness, which triage writes from the harness
+      // client's own counters.
+      tier3: harnessSummary()
     };
 
     return { ok: true, reportCount: store.reports.length, clusterCount: store.clusters.length, durationMs };
   } finally {
     running = false;
   }
+}
+
+/**
+ * The agent-harness summary the UI is allowed to render.
+ *
+ * EVERY field here is a COUNTED FACT produced by src/harness/trueforge.js from
+ * TrueForge's own responses during the last pass - a session id TrueForge
+ * minted, a turn id it minted, token counts off `turn.done.state.metrics`, an
+ * agent id read back off GET /api/v1/agents. Nothing is estimated, and nothing
+ * is here that the UI could not truthfully populate:
+ *
+ *   * `binding` is 'named-agent' only when TrueForge answered the session
+ *     create with agent.type === 'reference'. Anything else says 'inline-spec'.
+ *   * `approvalGate.armed` is read off the bound agent's own manifest, and
+ *     `fired` counts turns that actually parked on an approval decision. The
+ *     tier-3 agent has no tools, so honest output today is armed:false, fired:0
+ *     - we surface that rather than implying a gate we do not have. TrueForge's
+ *     gate is ALSO not Signal Zero's named-approver rule (see
+ *     docs/trueforge-verified.md); that stays server-side, below.
+ *   * `executedByHarness + executedByFallback + unresolved` is every tier-3
+ *     classification attempted this pass.
+ *
+ * Returns null before the first pipeline pass, because "no run yet" is not
+ * "zero executions".
+ */
+function harnessSummary() {
+  const h = store.harness;
+  if (!h) return null;
+  return {
+    executedByHarness: h.executedByHarness ?? 0,
+    executedByFallback: h.executedByFallback ?? 0,
+    unresolved: h.unresolved ?? 0,
+    harnessReachable: h.reachable ?? null,
+    harnessBaseUrl: h.baseUrl ?? null,
+    harnessModel: h.model ?? null,
+    harnessSessionId: h.sessionId ?? null,
+    harnessTokens: h.totalTokens ?? 0,
+    // --- which agent, and how the session was bound to it -------------------
+    agentName: h.agentName ?? null,
+    agentId: h.agentId ?? null,
+    agentRegistered: h.agentRegistered ?? null,
+    binding: h.binding ?? null,
+    // --- per-turn evidence, so a claim can be checked against TrueForge ------
+    turns: Array.isArray(h.turns) ? h.turns : [],
+    tokens: {
+      total: h.totalTokens ?? 0,
+      input: h.inputTokens ?? 0,
+      output: h.outputTokens ?? 0,
+      cacheRead: h.cacheReadTokens ?? 0
+    },
+    approvalGate: h.approvalGate ?? { armed: false, tools: [], fired: 0, resolved: 0 },
+    guardrail: h.guardrail ?? { inputBlocked: 0, outputBlocked: 0, advisory: 0, rules: [] },
+    lastError: h.lastError ?? null,
+    checkedAt: h.checkedAt ?? null
+  };
 }
 
 function round(n, places = 1) {
@@ -454,12 +515,18 @@ app.get('/api/state', (_req, res) => {
     checkpoint: store.checkpoint,
     incidents: store.incidents,
     sources: sourcesArray(),
+    // Agent-harness provenance for the last pass. null until a pass has run.
+    // Every field is a counted fact from src/harness/trueforge.js, so the UI can
+    // state plainly whether TrueForge executed a classification or the
+    // direct-fetch fallback did. See store.harness.
+    harness: harnessSummary(),
     stats: {
       reportCount: store.stats?.reportCount ?? store.reports.length,
       clusterCount: store.stats?.clusterCount ?? store.clusters.length,
       lastRunAt: store.stats?.lastRunAt ?? null,
       durationMs: store.stats?.durationMs ?? 0,
-      pendingCheckpointCount: store.checkpoint.filter((i) => i.status === 'pending').length
+      pendingCheckpointCount: store.checkpoint.filter((i) => i.status === 'pending').length,
+      tier3: store.stats?.tier3 ?? null
     }
   });
 });

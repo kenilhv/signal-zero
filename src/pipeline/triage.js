@@ -15,13 +15,23 @@
 //                            between short windows of the report text and each
 //                            settlement's name/aliases/district.
 //   TIER 3  LLM            - ONLY the low-confidence residual. This is the one
-//                            and only LLM call in the entire codebase. It never
-//                            touches dedup scoring or ranking math, which stay
-//                            deterministic and auditable by construction.
+//                            and only LLM touchpoint in the entire codebase. It
+//                            never touches dedup scoring or ranking math, which
+//                            stay deterministic and auditable by construction.
+//
+// TIER 3 RUNS ON THE TRUEFORGE AGENT HARNESS. It is not a raw POST to a model
+// endpoint: we create a TrueForge session from an AgentSpec and TrueForge
+// executes the turn, resolving the model through its own registered provider.
+// The direct fetch is still here, but only as the FALLBACK for when the harness
+// is unreachable or a turn fails - and when it runs, the incident feed says the
+// fallback ran: once per classification, once on the first mid-pass harness
+// failure naming the executor switch, and once more as a per-pass roll-up
+// counting how many classifications the harness did not execute. See
+// src/harness/trueforge.js for why all three exist.
 //
 // Reaching tier 3 is itself a failure signal, so it is always written to the
-// incident feed via addIncident('llm-fallback', ...) - whether or not an API
-// key is configured.
+// incident feed via addIncident('llm-fallback', ...) - whichever path executed
+// it, and whether or not any executor was available at all.
 // ---------------------------------------------------------------------------
 
 import fs from 'node:fs';
@@ -29,7 +39,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import config from '../config.js';
-import { addIncident } from '../store.js';
+import store, { addIncident } from '../store.js';
+import * as harness from '../harness/trueforge.js';
+import {
+  guardInput,
+  guardOutput,
+  blockAndRecord,
+  describeVerdict,
+  worstSeverity
+} from '../guardrails/index.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GAZETTEER_PATH = path.join(HERE, '..', 'data', 'gazetteer.json');
@@ -174,6 +192,54 @@ const PLACE_MARKER_RE =
   /\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(village|bazar|bazaar|gaun|gaon|tole|hamlet|settlement|basti|VDC|ward)\b/g;
 const PLACE_MARKER_RE_2 =
   /\b(?:village|settlement|hamlet|ward)\s+of\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b/g;
+
+/**
+ * A DATELINE IS NOT EVIDENCE ABOUT THE DATELINED PLACE.
+ *
+ * Wire copy opens with the filing location: "BATTAR - Three passengers were
+ * injured when a bus overturned on the Narayanghat road in Chitwan." That story
+ * is about Chitwan. Battar is where the reporter was sitting. Tier 1 matched the
+ * name, saw "injured", and recorded a CORROBORATION for Battar - which resets
+ * Battar's silence clock on the strength of a bus crash 90km away. For a system
+ * whose entire output is "how long has this place gone unconfirmed", a false
+ * corroboration is the worst single defect available, and this is the cheapest
+ * way to manufacture one from real, unmodified wire text.
+ *
+ * The rule is deliberately narrow, and the narrowness is what makes it correct:
+ * it fires ONLY when the settlement name appears nowhere except inside the
+ * dateline. "DHUNCHE - Rescue teams reached Dhunche this morning" names Dhunche
+ * twice and resolves normally, because there the dateline and the subject
+ * coincide - which is the common case and must not be broken.
+ */
+const DATELINE_RE = /^\s*([\p{Lu}][\p{Lu}\p{N} .'’-]{1,40}?)\s*[-–—]\s/u;
+
+/** Whole-token containment over the normalized stream (never substring). */
+function mentions(normalizedHaystack, normalizedNeedle) {
+  if (!normalizedNeedle) return false;
+  return ` ${normalizedHaystack} `.includes(` ${normalizedNeedle} `);
+}
+
+/**
+ * Is `name` mentioned ONLY inside this report's dateline?
+ * @returns {{dateline: string}|null} the dateline when the rule fires
+ */
+export function datelineOnlyMention(report, name) {
+  const text = String(report?.text || '');
+  const m = DATELINE_RE.exec(text);
+  if (!m) return null;
+
+  const needle = normalizeText(name);
+  if (!needle) return null;
+
+  // The name has to BE the dateline...
+  if (!mentions(normalizeText(m[1]), needle)) return null;
+  // ...and must appear nowhere else: not in the headline...
+  if (mentions(normalizeText(report?.title || ''), needle)) return null;
+  // ...and not in the body after the dateline.
+  if (mentions(normalizeText(text.slice(m[0].length)), needle)) return null;
+
+  return { dateline: m[0].trim() };
+}
 
 function countHits(normalized, lexicon) {
   const hits = [];
@@ -432,35 +498,251 @@ function tier2Match(tokens, index, restrictTo = null) {
 }
 
 // ---------------------------------------------------------------------------
-// TIER 3 - the ONLY LLM call in Signal Zero.
+// TIER 3 - the ONLY LLM touchpoint in Signal Zero.
+//
+// Two execution paths, in this order:
+//
+//   A. TRUEFORGE HARNESS (preferred). We create a TrueForge session from an
+//      AgentSpec and ask TrueForge to run a turn. TrueForge owns the agent
+//      loop, resolves the model through its own registered provider, and hands
+//      back a turn object with real ids and token counts. See
+//      src/harness/trueforge.js.
+//   B. DIRECT FETCH (fallback). The original raw POST to an OpenAI-compatible
+//      /chat/completions. Only used when the harness is unreachable or the turn
+//      failed, and every use of it is written to the incident feed IN THOSE
+//      WORDS. The demo must not hard-fail because a container is down, but it
+//      must also never be described as harness-executed when it was not.
+//
+// Both paths share ONE prompt and ONE parser, so the two are comparable and
+// switching path cannot silently change the classification contract.
 // ---------------------------------------------------------------------------
 
-async function tier3Classify(report, shortlist) {
+const TIER3_INSTRUCTIONS =
+  'You classify disaster-response reports for the 2026 Trishuli river GLOF in Nepal. ' +
+  'Reply with JSON only: {"category": one of ' + JSON.stringify(CATEGORIES) + ', ' +
+  '"settlementId": one of the offered ids or null, "confidence": 0..1, "why": short string}. ' +
+  'Never suggest sending anyone anywhere; you only label the text.';
+
+/**
+ * The per-report user message. Identical on both paths, with ONE addition on
+ * the harness path: the registered agent's output contract keys every
+ * classification by `reportId`, so the id has to travel with the text.
+ */
+function tier3Prompt(report, shortlist, { withReportId = false } = {}) {
   const options = shortlist
     .map((c) => `${c.entry.settlement.id} (${c.entry.settlement.name}, ${c.entry.settlement.district})`)
     .join('\n');
+  return (
+    (withReportId ? `REPORT ID: ${report.id}\n` : '') +
+    `SOURCE: ${report.sourceName} (${report.sourceType})\n` +
+    `TITLE: ${report.title || ''}\n` +
+    `TEXT: ${String(report.text || '').slice(0, 1500)}\n\n` +
+    `CANDIDATE SETTLEMENTS (or null if none apply):\n${options || '(none)'}`
+  );
+}
 
+/**
+ * Unwrap whichever answer shape we were handed.
+ *
+ *   - The REGISTERED agent (agents/triage-agent.md) answers with its own
+ *     contract: {classifications:[{reportId, category, settlementId,
+ *     confidence, rationale, evidence, injectionSuspected, ...}], unresolved:[]}.
+ *     That contract lives in TrueForge, not here, so we read it rather than
+ *     dictate it.
+ *   - The direct-fetch fallback answers with the flat
+ *     {category, settlementId, confidence, why} shape TIER3_INSTRUCTIONS asks
+ *     for.
+ *
+ * Anything else is a parse failure, which is a tier-3 failure, which is
+ * recorded - never smoothed over into a guess.
+ */
+/**
+ * A PRINCIPLED REFUSAL IS NOT A CRASH.
+ *
+ * The registered agent is instructed to refuse anything that would breach one of
+ * the four hard rules, and it does - but it refuses in prose, so `JSON.parse`
+ * threw and the report was recorded as "tier 3 failed" with a generic parse
+ * error. The system's BEST behaviour (an agent correctly citing Rule 1 at an
+ * injected dispatch request) was logged identically to a malformed response,
+ * which makes it invisible in exactly the demo where it is the most convincing
+ * thing that could happen.
+ *
+ * This recognises that shape so it can be recorded as what it is. It is
+ * deliberately narrow: a refusal VERB plus a citation of one of this system's
+ * own rules. Anything vaguer stays a parse failure, because "the model said
+ * something that mentions dispatch" is not evidence of a refusal.
+ *
+ * @returns {{verb: string, cited: string, text: string}|null}
+ */
+const REFUSAL_VERB_RE =
+  /\b(i cannot|i can not|i can't|i will not|i won't|i must not|i am not able to|i refuse|cannot comply|will not comply|unable to comply|i decline)\b/i;
+const REFUSAL_CITATION_RE =
+  /\b(rule\s*[1-4]|hard rule|no[- ]dispatch|no dispatch|named human|named approver|honest unknown|dispatch-shaped|belongs to a human)\b/i;
+
+export function detectRefusal(rawText) {
+  const text = String(rawText || '');
+  if (!text.trim()) return null;
+  const verb = REFUSAL_VERB_RE.exec(text);
+  if (!verb) return null;
+  const cited = REFUSAL_CITATION_RE.exec(text);
+  if (!cited) return null;
+  return { verb: verb[0], cited: cited[0], text: text.slice(0, 600) };
+}
+
+function unwrapTier3(parsed) {
+  if (parsed && Array.isArray(parsed.classifications)) {
+    const first = parsed.classifications[0];
+    if (!first) {
+      // A STRUCTURED refusal: the agent declined inside the contract instead of
+      // dropping into prose. Same outcome for the report (unresolved), very
+      // different fact for the operator, so it is carried on the error rather
+      // than flattened into "no classification".
+      const r = parsed.refusal;
+      if (r && typeof r === 'object') {
+        const err = new Error(
+          `agent REFUSED (cited "${String(r.rule || 'a hard rule')}"): ${String(r.reason || r.requested || '').slice(0, 180)}`
+        );
+        err.refusal = {
+          verb: 'structured refusal',
+          cited: String(r.rule || 'a hard rule').slice(0, 80),
+          text: JSON.stringify(r).slice(0, 600)
+        };
+        throw err;
+      }
+      const reason = parsed.unresolved?.[0]?.reason;
+      throw new Error(`agent returned no classification${reason ? `: ${String(reason).slice(0, 120)}` : ''}`);
+    }
+    return {
+      category: first.category,
+      settlementId: first.settlementId,
+      confidence: first.confidence,
+      // `rationale` is the registered contract's field name; keep it under
+      // `why` so ONE guardrail field list covers both paths.
+      why: first.rationale ?? first.why ?? '',
+      injectionSuspected: first.injectionSuspected === true,
+      ambiguous: first.ambiguous === true,
+      evidence: Array.isArray(first.evidence) ? first.evidence.slice(0, 4) : []
+    };
+  }
+  return {
+    category: parsed?.category,
+    settlementId: parsed?.settlementId,
+    confidence: parsed?.confidence,
+    why: parsed?.why ?? '',
+    injectionSuspected: false,
+    ambiguous: false,
+    evidence: []
+  };
+}
+
+/**
+ * Parse and HARD-CONSTRAIN a tier-3 answer. Identical on both paths.
+ * A model may only pick from the shortlist we offered; anything else is null.
+ */
+function parseTier3(rawText, shortlist) {
+  // Models occasionally wrap JSON in a fenced block even when asked not to.
+  const cleaned = String(rawText || '')
+    .replace(/^\s*```(?:json)?/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
+  const raw = unwrapTier3(JSON.parse(cleaned));
+
+  const category = CATEGORIES.includes(raw.category) ? raw.category : 'noise';
+  const allowedIds = new Set(shortlist.map((c) => c.entry.settlement.id));
+  const settlementId = allowedIds.has(raw.settlementId) ? raw.settlementId : null;
+  // Tier 3 is the low-confidence path by construction - never let it claim more
+  // certainty than the deterministic tiers. The registered agent is allowed to
+  // report 0.95; the pipeline is not allowed to believe it.
+  const confidence = clamp(Number(raw.confidence) || 0.4, 0.3, 0.7);
+
+  return {
+    category,
+    settlementId,
+    confidence,
+    // `why` is CLIPPED FOR DISPLAY. `whyFull` is what the guardrail scans.
+    //
+    // These used to be the same field, and the output guardrail scanned the
+    // clipped one: a measured 730-936 character rationale was checked 200
+    // characters deep, so roughly three quarters of the only free-text field the
+    // model produces was never scanned. It was only ever safe because the
+    // unscanned remainder was also discarded - i.e. the safety came from a
+    // truncation that exists for display, not for enforcement, and would vanish
+    // the moment anyone widened the clip or surfaced the full rationale.
+    why: String(raw.why || '').slice(0, 200),
+    whyFull: String(raw.why || '').slice(0, 8000),
+    injectionSuspected: raw.injectionSuspected,
+    ambiguous: raw.ambiguous
+  };
+}
+
+/**
+ * PATH A - executed by the TrueForge harness as a session turn against the
+ * NAMED registered agent. No AgentSpec crosses the wire: the model, the
+ * instructions (the four hard rules included) and the iteration limit are
+ * resolved by TrueForge from its own registry on every turn.
+ */
+async function tier3ViaHarness(report, shortlist) {
+  const turn = await harness.runTurn(
+    TIER3_INSTRUCTIONS, // used ONLY if the roster is missing and we bind inline
+    tier3Prompt(report, shortlist, { withReportId: true })
+  );
+  let out;
+  try {
+    out = parseTier3(turn.text, shortlist);
+  } catch (err) {
+    // Tell a refusal apart from a malformed answer before the error is flattened
+    // into a string by the caller. A structured refusal already carries the fact.
+    if (err && err.refusal) throw err;
+    const refusal = detectRefusal(turn.text);
+    if (refusal) {
+      const e = new Error(
+        `agent REFUSED (cited "${refusal.cited}"): ${refusal.text.replace(/\s+/g, ' ').slice(0, 180)}`
+      );
+      e.refusal = refusal;
+      throw e;
+    }
+    throw err;
+  }
+  const named = turn.binding === harness.BINDING.NAMED;
+  return {
+    ...out,
+    // The COMPLETE model utterance, so guardOutput scans what the model actually
+    // said rather than the subset the parser kept. Never stored: report.triage is
+    // assembled field by field below, so this exists only for the guardrail.
+    rawModelText: String(turn.text || '').slice(0, 20000),
+    // The executor name distinguishes the two harness bindings, because
+    // "TrueForge ran it against our registered agent" and "TrueForge ran it
+    // against a spec we shipped in the request" are different claims.
+    executor: named ? 'trueforge-harness' : 'trueforge-harness-inline',
+    harness: {
+      baseUrl: config.TRUEFORGE_BASE_URL,
+      model: config.TRUEFORGE_MODEL,
+      binding: turn.binding,
+      agentName: turn.agentName,
+      agentId: turn.agentId,
+      sessionId: turn.sessionId,
+      sessionReused: turn.sessionReused,
+      turnId: turn.turnId,
+      totalTokens: turn.totalTokens,
+      inputTokens: turn.inputTokens,
+      outputTokens: turn.outputTokens,
+      cacheReadTokens: turn.cacheReadTokens,
+      approvalRequired: turn.approvalRequired,
+      latencyMs: turn.latencyMs
+    }
+  };
+}
+
+/** PATH B - the original direct fetch. Fallback only. */
+async function tier3ViaDirectFetch(report, shortlist) {
+  const startedAt = Date.now();
   const body = {
     model: config.OPENAI_MODEL,
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
-      {
-        role: 'system',
-        content:
-          'You classify disaster-response reports for the 2026 Trishuli river GLOF in Nepal. ' +
-          'Reply with JSON only: {"category": one of ' + JSON.stringify(CATEGORIES) + ', ' +
-          '"settlementId": one of the offered ids or null, "confidence": 0..1, "why": short string}. ' +
-          'Never suggest sending anyone anywhere; you only label the text.'
-      },
-      {
-        role: 'user',
-        content:
-          `SOURCE: ${report.sourceName} (${report.sourceType})\n` +
-          `TITLE: ${report.title || ''}\n` +
-          `TEXT: ${String(report.text || '').slice(0, 1500)}\n\n` +
-          `CANDIDATE SETTLEMENTS (or null if none apply):\n${options || '(none)'}`
-      }
+      { role: 'system', content: TIER3_INSTRUCTIONS },
+      { role: 'user', content: tier3Prompt(report, shortlist) }
     ]
   };
 
@@ -478,16 +760,99 @@ async function tier3Classify(report, shortlist) {
   const json = await res.json();
   const raw = json?.choices?.[0]?.message?.content;
   if (!raw) throw new Error('LLM returned no content');
-  const parsed = JSON.parse(raw);
 
-  const category = CATEGORIES.includes(parsed.category) ? parsed.category : 'noise';
-  const allowedIds = new Set(shortlist.map((c) => c.entry.settlement.id));
-  const settlementId = allowedIds.has(parsed.settlementId) ? parsed.settlementId : null;
-  // Tier 3 is the low-confidence path by construction - never let it claim more
-  // certainty than the deterministic tiers.
-  const confidence = clamp(Number(parsed.confidence) || 0.4, 0.3, 0.7);
+  return {
+    ...parseTier3(raw, shortlist),
+    rawModelText: String(raw || '').slice(0, 20000),
+    executor: 'direct-fetch',
+    harness: null,
+    direct: {
+      baseUrl: config.OPENAI_BASE_URL,
+      model: config.OPENAI_MODEL,
+      latencyMs: Date.now() - startedAt
+    }
+  };
+}
 
-  return { category, settlementId, confidence, why: String(parsed.why || '').slice(0, 200) };
+// ---------------------------------------------------------------------------
+// Honest surfacing. `store.harness` is the single source of truth for what the
+// UI is allowed to say about the harness, and the sources[] entry exists so an
+// operator sees the harness in the same connector strip as everything else.
+//
+// The rule: the entry is only registered when tier 3 actually ran this pass.
+// A harness that was never asked to do anything is not "live" and is not
+// "degraded" - it has no result to report, so it reports nothing.
+// ---------------------------------------------------------------------------
+
+const HARNESS_SOURCE_NAME = 'TrueForge harness - triage tier 3';
+
+/**
+ * Surface a guardrail verdict that FIRED but did not block.
+ *
+ * blockAndRecord() already puts every block on the failure feed. This covers
+ * the other half: an advisory hit is the guardrail telling an operator it saw
+ * something, and swallowing it makes a working guardrail indistinguishable from
+ * a dead one. It does NOT touch the classification - advisory means advisory.
+ */
+function noteAdvisory(report, verdict, label, phase, executor) {
+  if (!verdict || verdict.ok) return;
+  harness.countGuardrail(phase, false, verdict.violations.map((v) => v.rule));
+  addIncident(
+    'degraded-source',
+    `GUARDRAIL ADVISORY (${phase}): "${label}" - ${describeVerdict(verdict)}. Not blocking; the classification was kept and this is on the record.`,
+    {
+      component: 'guardrail',
+      stage: 'triage',
+      tier: 3,
+      phase,
+      blocked: false,
+      reportId: report ? report.id : null,
+      sourceName: report ? report.sourceName : null,
+      executor: executor || 'none',
+      severity: worstSeverity(verdict),
+      rules: verdict.violations.map((v) => v.rule),
+      violations: verdict.violations.map((v) => ({
+        rule: v.rule,
+        severity: v.severity,
+        matched: v.matched,
+        span: v.span
+      }))
+    }
+  );
+}
+
+function publishHarnessStatus() {
+  const t = harness.getTelemetry();
+  const facts = harness.getAgentFacts();
+  store.harness = {
+    ...t,
+    // Never claim more than the counters support.
+    executedByHarness: t.executedTurns,
+    executedByFallback: t.fallbackClassifications,
+    unresolved: t.unresolved,
+    // What the registry actually says about the bound agent, read off
+    // GET /api/v1/agents at probe time - not what this repo hoped it said.
+    agent: {
+      name: facts.name,
+      registered: facts.registered,
+      id: facts.id,
+      model: facts.model,
+      iterationLimit: facts.iterationLimit,
+      toolCount: facts.toolCount
+    }
+  };
+
+  const attempted = t.executedTurns + t.fallbackClassifications + t.unresolved;
+  if (attempted === 0) return; // nothing happened; say nothing
+
+  if (!store.sources || typeof store.sources !== 'object') store.sources = {};
+  store.sources[HARNESS_SOURCE_NAME] = {
+    name: HARNESS_SOURCE_NAME,
+    sourceType: 'agent-harness',
+    // 'live' ONLY if the harness genuinely executed at least one turn.
+    status: t.executedTurns > 0 ? 'live' : 'degraded',
+    lastFetchAt: new Date().toISOString()
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +883,39 @@ export async function triage(reports, settlements) {
     // --- TIER 1 -----------------------------------------------------------
     if (matches.length === 1) {
       const only = matches[0];
+      const matchedName = only.variant ? only.variant.raw : only.entry.settlement.name;
+
+      // A name that occurs ONLY in the dateline is not a resolution. Resolve to
+      // nothing and classify the report on its own words - the same path a
+      // report with no place name at all takes - rather than attaching a
+      // corroboration to the town the reporter filed from.
+      const dateline = datelineOnlyMention(report, matchedName);
+      if (dateline) {
+        const { category, strength, signals } = classifyCategory(
+          report,
+          normalized,
+          null,
+          unknownPlace
+        );
+        report.settlementId = null;
+        report.triage = {
+          category,
+          confidence: Number(clamp(0.9 * strength + 0.1, 0.6, 0.96).toFixed(3)),
+          tier: 1,
+          matchedOn: null,
+          signals: {
+            ...signals,
+            // Auditable: the match happened and was refused, with the reason.
+            datelineOnly: {
+              name: matchedName,
+              wouldHaveResolvedTo: only.entry.settlement.id,
+              dateline: dateline.dateline.slice(0, 60)
+            }
+          }
+        };
+        continue;
+      }
+
       const settlementId = only.entry.settlement.id;
       const { category, strength, signals } = classifyCategory(
         report,
@@ -530,7 +928,7 @@ export async function triage(reports, settlements) {
         category,
         confidence: Number(clamp(0.9 * strength + 0.1, 0.6, 0.96).toFixed(3)),
         tier: 1,
-        matchedOn: only.variant ? only.variant.raw : only.entry.settlement.name,
+        matchedOn: matchedName,
         signals
       };
       continue;
@@ -620,66 +1018,385 @@ export async function triage(reports, settlements) {
   }
 
   // --- TIER 3 -------------------------------------------------------------
-  // Every trip here is logged to the failure feed, key or no key: hitting the
-  // LLM fallback IS the degradation we want operators to see.
-  let llmCalls = 0;
-  for (const { report, shortlist } of residual) {
-    if (!config.OPENAI_API_KEY) {
-      addIncident(
-        'llm-fallback',
-        `No LLM key: "${(report.title || report.id).slice(0, 70)}" left UNRESOLVED after tier 2`,
-        { reportId: report.id, sourceName: report.sourceName, tier: 3, resolved: false, reason: 'no-api-key' }
-      );
-      report.triage = { ...report.triage, tier: 3, confidence: 0.3, matchedOn: null };
-      report.settlementId = null;
-      continue;
-    }
+  // Every trip here is logged to the failure feed, harness or no harness, key
+  // or no key: hitting the tier-3 fallback IS the degradation we want operators
+  // to see. What is NEW is that the feed now also records WHICH path executed
+  // the classification, so nobody has to take "the harness ran it" on trust.
+  harness.beginPass();
 
-    if (llmCalls >= MAX_LLM_CALLS) {
-      addIncident(
-        'llm-fallback',
-        `Tier-3 budget exhausted (${MAX_LLM_CALLS} calls); "${(report.title || report.id).slice(0, 60)}" left unresolved`,
-        { reportId: report.id, tier: 3, resolved: false, reason: 'budget' }
-      );
-      report.triage = { ...report.triage, tier: 3, confidence: 0.3 };
-      continue;
-    }
+  if (residual.length === 0) {
+    publishHarnessStatus();
+    return list;
+  }
 
-    llmCalls++;
-    try {
-      const out = await tier3Classify(report, shortlist);
-      report.settlementId = out.settlementId;
-      report.triage = {
-        category: out.category,
-        confidence: out.confidence,
-        tier: 3,
-        matchedOn: out.settlementId ? `llm:${out.settlementId}` : 'llm:unresolved',
-        signals: { ...(report.triage?.signals || {}), llmWhy: out.why }
-      };
+  // One reachability probe per pass, not one per report. If the container is
+  // down we want to know that once, cheaply, and say so once.
+  let harnessUsable = false;
+  let harnessDownReason = null;
+
+  if (harness.isEnabled()) {
+    const p = await probeOnce();
+    harnessUsable = p.ok;
+    harnessDownReason = p.ok ? null : p.reason;
+
+    // Reachable, but our NAMED agent is not on the roster. Tier 3 can still run
+    // through the harness on an inline spec - but that is a weaker claim than
+    // "the registered agent classified it", so it is said out loud rather than
+    // quietly downgraded.
+    if (p.ok && p.degraded) {
       addIncident(
-        'llm-fallback',
-        `Tier-3 LLM classified "${(report.title || report.id).slice(0, 60)}" as ${out.category}`,
+        'degraded-source',
+        `TrueForge is up but agent "${config.TRUEFORGE_AGENT}" is NOT on the registry - tier 3 is binding an INLINE AgentSpec instead of the registered roster agent. Run "node scripts/load-agents.mjs" to restore it.`,
         {
-          reportId: report.id,
-          model: config.OPENAI_MODEL,
+          stage: 'triage',
           tier: 3,
-          resolved: Boolean(out.settlementId),
-          settlementId: out.settlementId,
-          confidence: out.confidence
+          component: 'trueforge-harness',
+          baseUrl: config.TRUEFORGE_BASE_URL,
+          agentName: config.TRUEFORGE_AGENT,
+          binding: 'inline-spec',
+          reason: p.reason,
+          pendingClassifications: residual.length
         }
       );
-    } catch (err) {
+    }
+
+    if (!p.ok) {
+      addIncident(
+        'degraded-source',
+        `TrueForge harness unreachable at ${config.TRUEFORGE_BASE_URL} (${p.reason}) - tier 3 is running on the DIRECT-FETCH FALLBACK path, not through the harness`,
+        {
+          stage: 'triage',
+          tier: 3,
+          component: 'trueforge-harness',
+          baseUrl: config.TRUEFORGE_BASE_URL,
+          model: config.TRUEFORGE_MODEL,
+          reason: p.reason,
+          fallback: config.OPENAI_API_KEY ? 'direct-fetch' : 'none (no OPENAI_API_KEY)',
+          pendingClassifications: residual.length
+        }
+      );
+    }
+  } else {
+    harnessDownReason = 'disabled by TRUEFORGE_ENABLED';
+    addIncident(
+      'degraded-source',
+      'TrueForge harness is switched OFF (TRUEFORGE_ENABLED=false) - tier 3 is running on the direct-fetch fallback path',
+      { stage: 'triage', tier: 3, component: 'trueforge-harness', reason: harnessDownReason }
+    );
+  }
+
+  let llmCalls = 0;
+  // MID-RUN DEGRADATION. The probe above describes the harness at the START of
+  // the pass. It cannot describe a container that dies at t+2.5s - which is
+  // precisely what a chaos test does. Without these two, the only thing that
+  // announced the executor switch was the per-report incident at the BOTTOM of
+  // the loop, which never runs when the fallback's own output is then blocked by
+  // the output guardrail, and which says nothing at all about the pass as a
+  // whole. src/harness/trueforge.js promises, in those words, that a fallback
+  // "says so": that promise is about the pass, so the pass has to say it.
+  let midRunFailures = 0;
+  let midRunAnnounced = false;
+  const firstMidRunError = { reason: null };
+  for (const { report, shortlist } of residual) {
+    const label = String(report.title || report.id).slice(0, 60);
+
+    // --- GUARDRAIL (input) -------------------------------------------------
+    // Scraped content is UNTRUSTED DATA. It is checked for prompt injection
+    // BEFORE the model is allowed to see it - catching it on the way out would
+    // already be too late. See src/guardrails/README.md.
+    const inputVerdict = guardInput(
+      `${report.title || ''}\n${report.text || ''}`,
+      { reportId: report.id, sourceName: report.sourceName }
+    );
+    if (inputVerdict.blocked) {
+      harness.countGuardrail('input', true, inputVerdict.violations.map((v) => v.rule));
+      harness.countUnresolved();
+      blockAndRecord(report, inputVerdict, { label, phase: 'input' });
+      continue;
+    }
+    // A verdict that fired but did not block is still enforcement doing
+    // something, and an operator who only ever sees blocks cannot tell a quiet
+    // guardrail from an absent one. Count it and put it on the feed.
+    noteAdvisory(report, inputVerdict, label, 'input', 'none');
+
+    if (llmCalls >= MAX_LLM_CALLS) {
+      harness.countUnresolved();
       addIncident(
         'llm-fallback',
-        `Tier-3 LLM call FAILED (${err.message}); "${(report.title || report.id).slice(0, 50)}" left unresolved`,
-        { reportId: report.id, tier: 3, resolved: false, reason: 'error', error: String(err.message) }
+        `Tier-3 budget exhausted (${MAX_LLM_CALLS} classifications); "${label}" left unresolved`,
+        { reportId: report.id, tier: 3, executor: 'none', resolved: false, reason: 'budget' }
       );
-      report.triage = { ...report.triage, tier: 3, confidence: 0.3 };
+      report.triage = { ...report.triage, tier: 3, confidence: 0.3, executor: 'none' };
+      continue;
+    }
+
+    // --- PATH A: the harness ---------------------------------------------
+    let out = null;
+    let harnessError = null;
+    if (harnessUsable) {
+      llmCalls++;
+      try {
+        out = await tier3ViaHarness(report, shortlist);
+      } catch (err) {
+        harnessError = String(err && err.message ? err.message : err);
+        harness.noteError(harnessError);
+
+        // A REFUSAL IS NOT A FAULT. Record it as the positive event it is, and
+        // do not let it be counted as a mid-pass harness failure - the harness
+        // worked perfectly; the agent declined a request that would have broken
+        // a hard rule. The report is still left unresolved, which is correct: a
+        // refusal is not a classification.
+        if (err && err.refusal) {
+          harness.countUnresolved();
+          addIncident(
+            'agent-refusal',
+            `Tier-3 agent REFUSED to answer "${label}", citing "${err.refusal.cited}" - the report text asked for something one of the four hard rules forbids. No classification was produced and the report is left UNRESOLVED. This is the guardrail working, not a failure.`,
+            {
+              component: 'trueforge-harness',
+              stage: 'triage',
+              tier: 3,
+              phase: 'agent-refusal',
+              reportId: report.id,
+              sourceName: report.sourceName,
+              agentName: config.TRUEFORGE_AGENT,
+              executor: 'none',
+              resolved: false,
+              refused: true,
+              citedRule: err.refusal.cited,
+              refusalVerb: err.refusal.verb
+            }
+          );
+          report.triage = {
+            ...report.triage,
+            tier: 3,
+            confidence: 0.3,
+            matchedOn: null,
+            executor: 'none',
+            refused: { citedRule: err.refusal.cited }
+          };
+          report.settlementId = null;
+          continue;
+        }
+
+        midRunFailures++;
+        if (!firstMidRunError.reason) firstMidRunError.reason = harnessError;
+
+        // FIRST failure of the pass -> one incident, immediately, naming the
+        // error and the executor that is about to take over. Emitted here rather
+        // than after the fallback succeeds, so it exists even when the fallback
+        // then fails, is blocked by the output guardrail, or is skipped for want
+        // of a key.
+        if (!midRunAnnounced) {
+          midRunAnnounced = true;
+          const nextExecutor = config.OPENAI_API_KEY
+            ? 'the DIRECT-FETCH FALLBACK path, not through the harness'
+            : 'NOTHING - no OPENAI_API_KEY is configured, so these classifications are left UNRESOLVED';
+          addIncident(
+            'llm-fallback',
+            `TrueForge harness FAILED MID-PASS at ${config.TRUEFORGE_BASE_URL} (${harnessError}) - the reachability probe passed before this pass started, so the harness went down while it was running. Tier 3 has SWITCHED EXECUTOR to ${nextExecutor}.`,
+            {
+              stage: 'triage',
+              tier: 3,
+              component: 'trueforge-harness',
+              phase: 'mid-pass',
+              baseUrl: config.TRUEFORGE_BASE_URL,
+              model: config.TRUEFORGE_MODEL,
+              agentName: config.TRUEFORGE_AGENT,
+              probePassed: true,
+              reason: harnessError,
+              executorBefore: 'trueforge-harness',
+              executorAfter: config.OPENAI_API_KEY ? 'direct-fetch' : 'none',
+              reportId: report.id,
+              resolved: false
+            }
+          );
+        }
+      }
+    }
+
+    // --- PATH B: the direct-fetch fallback --------------------------------
+    if (!out && config.OPENAI_API_KEY) {
+      if (!harnessUsable) llmCalls++; // path A never spent the budget slot
+      try {
+        out = await tier3ViaDirectFetch(report, shortlist);
+        harness.countFallback();
+      } catch (err) {
+        const directError = String(err && err.message ? err.message : err);
+        harness.countUnresolved();
+        addIncident(
+          'llm-fallback',
+          harnessError
+            ? `Tier-3 FAILED on BOTH paths - harness: ${harnessError}; direct-fetch fallback: ${directError}. "${label}" left unresolved`
+            : `Tier-3 direct-fetch fallback FAILED (${directError}); "${label}" left unresolved`,
+          {
+            reportId: report.id,
+            tier: 3,
+            executor: 'none',
+            resolved: false,
+            reason: 'error',
+            harnessError,
+            error: directError
+          }
+        );
+        report.triage = { ...report.triage, tier: 3, confidence: 0.3, executor: 'none' };
+        report.settlementId = null;
+        continue;
+      }
+    }
+
+    // --- Neither path was available ---------------------------------------
+    if (!out) {
+      harness.countUnresolved();
+      addIncident(
+        'llm-fallback',
+        harnessError
+          ? `Tier-3 harness turn FAILED (${harnessError}) and no direct-fetch key is configured; "${label}" left UNRESOLVED`
+          : `Tier-3 unavailable (harness: ${harnessDownReason || 'unreachable'}; no OPENAI_API_KEY for the fallback) - "${label}" left UNRESOLVED after tier 2`,
+        {
+          reportId: report.id,
+          sourceName: report.sourceName,
+          tier: 3,
+          executor: 'none',
+          resolved: false,
+          reason: harnessError ? 'harness-turn-failed' : 'no-executor',
+          harnessError,
+          harnessDownReason
+        }
+      );
+      report.triage = { ...report.triage, tier: 3, confidence: 0.3, matchedOn: null, executor: 'none' };
       report.settlementId = null;
+      continue;
+    }
+
+    // --- GUARDRAIL (output) ------------------------------------------------
+    // The prompt ASKS the model never to suggest sending anyone anywhere. This
+    // CHECKS it, whichever path produced the answer. A violation is dropped and
+    // recorded, never repaired into something that reads clean.
+    //
+    // `out` carries whyFull and rawModelText, so what is scanned is the model's
+    // COMPLETE utterance - not the 200-character display clip, and not only the
+    // fields this parser happens to keep.
+    const outputVerdict = guardOutput(out, {
+      reportId: report.id,
+      executor: out.executor,
+      coverageBasis: report.coverageBasis || null
+    });
+    if (outputVerdict.blocked) {
+      harness.countGuardrail('output', true, outputVerdict.violations.map((v) => v.rule));
+      harness.countUnresolved();
+      blockAndRecord(report, outputVerdict, { label, phase: 'output', executor: out.executor });
+      continue;
+    }
+    noteAdvisory(report, outputVerdict, label, 'output', out.executor);
+
+    // The registered agent is instructed to flag report text that tries to
+    // instruct IT (agents/triage-agent.md rule 9). Our deterministic injection
+    // guardrail above is the enforcement; this is the agent's own second
+    // opinion, and it belongs on the feed either way.
+    if (out.injectionSuspected) {
+      addIncident(
+        'degraded-source',
+        `Tier-3 agent flagged "${label}" as containing text directed at the classifier (injectionSuspected). The deterministic input guardrail did not block it; both readings are on the record.`,
+        {
+          component: 'guardrail',
+          stage: 'triage',
+          tier: 3,
+          phase: 'agent-self-report',
+          blocked: false,
+          reportId: report.id,
+          sourceName: report.sourceName,
+          executor: out.executor
+        }
+      );
+    }
+
+    // --- Record the classification ----------------------------------------
+    const viaHarness = out.executor.startsWith('trueforge-harness');
+    report.settlementId = out.settlementId;
+    report.triage = {
+      category: out.category,
+      confidence: out.confidence,
+      tier: 3,
+      // The provenance travels WITH the classification, not just in the feed.
+      executor: out.executor,
+      matchedOn: out.settlementId
+        ? `${viaHarness ? 'trueforge' : 'llm'}:${out.settlementId}`
+        : `${viaHarness ? 'trueforge' : 'llm'}:unresolved`,
+      harness: out.harness || null,
+      signals: { ...(report.triage?.signals || {}), llmWhy: out.why }
+    };
+
+    addIncident(
+      'llm-fallback',
+      viaHarness
+        ? `Tier-3 EXECUTED BY THE TRUEFORGE HARNESS - ${
+            out.harness.binding === 'named-agent'
+              ? `registered agent "${out.harness.agentName}" (${out.harness.agentId})`
+              : 'INLINE spec (agent not on the registry)'
+          }, session ${out.harness.sessionId}, turn ${out.harness.turnId}, ${out.harness.totalTokens} tokens: "${label}" -> ${out.category}`
+        : `Tier-3 FELL BACK to a direct model fetch (harness: ${harnessError || harnessDownReason || 'unavailable'}): "${label}" -> ${out.category}`,
+      {
+        reportId: report.id,
+        tier: 3,
+        executor: out.executor,
+        harness: out.harness || null,
+        harnessError: viaHarness ? null : harnessError || harnessDownReason,
+        model: viaHarness ? config.TRUEFORGE_MODEL : config.OPENAI_MODEL,
+        resolved: Boolean(out.settlementId),
+        settlementId: out.settlementId,
+        confidence: out.confidence
+      }
+    );
+  }
+
+  // --- PER-PASS ROLL-UP ----------------------------------------------------
+  // One line an operator reads without counting incidents: how many of this
+  // pass's classifications were produced by something other than the harness,
+  // and why. `executedByFallback` has always been honest in /api/state; this
+  // puts the same number on the feed, which is the surface the product tells
+  // people to trust.
+  {
+    const t = harness.getTelemetry();
+    if (t.fallbackClassifications > 0) {
+      addIncident(
+        'llm-fallback',
+        `PASS SUMMARY: ${t.fallbackClassifications} of ${t.executedTurns + t.fallbackClassifications} tier-3 classifications this pass were produced by the DIRECT-FETCH FALLBACK, NOT by the TrueForge harness (${
+          midRunFailures > 0
+            ? `${midRunFailures} harness turn(s) failed mid-pass; first error: ${firstMidRunError.reason}`
+            : `harness unavailable at pass start: ${harnessDownReason || 'unknown'}`
+        }). ${t.executedTurns} were executed by the harness.`,
+        {
+          stage: 'triage',
+          tier: 3,
+          component: 'trueforge-harness',
+          phase: 'pass-summary',
+          executedByHarness: t.executedTurns,
+          executedByFallback: t.fallbackClassifications,
+          unresolved: t.unresolved,
+          midRunHarnessFailures: midRunFailures,
+          firstHarnessError: firstMidRunError.reason,
+          harnessDownReason,
+          resolved: false
+        }
+      );
     }
   }
 
+  publishHarnessStatus();
   return list;
+}
+
+/**
+ * Probe TrueForge once, converting any thrown error into the same
+ * {ok, reason} shape the caller expects. The harness must never be able to
+ * throw its way into breaking a pipeline pass.
+ */
+async function probeOnce() {
+  try {
+    return await harness.probe();
+  } catch (err) {
+    return { ok: false, reason: String(err && err.message ? err.message : err) };
+  }
 }
 
 export default triage;

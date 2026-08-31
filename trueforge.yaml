@@ -1,7 +1,45 @@
 # =============================================================================
-# Signal Zero - TrueForge harness catalog
+# Signal Zero - TrueForge harness catalog  (ILLUSTRATIVE - NOT THE SOURCE OF TRUTH)
 # =============================================================================
 # TrueForge: https://github.com/truefoundry/trueforge (MIT) · @truefoundry/trueforge-sdk
+#
+# -----------------------------------------------------------------------------
+# READ THIS BEFORE READING ANYTHING ELSE IN THIS FILE
+# -----------------------------------------------------------------------------
+# NOTHING IN THIS REPOSITORY READS THIS FILE. The roster is registered by
+# `scripts/load-agents.mjs`, which builds every manifest from the `trueforge:`
+# YAML frontmatter in `agents/*.md`. That frontmatter is the source of truth;
+# this file is a hand-written illustration of the shapes involved, and it has
+# drifted from the live registry. For what is actually running, ask the server:
+#
+#     curl -s http://localhost:4000/api/v1/agents | jq '.data[] | {name, manifest}'
+#
+# KNOWN DRIFT (measured against the live registry on 2026-08-30, coordinator
+# block; the other four blocks drift the same way):
+#
+#   field                     this file                              live
+#   ------------------------  -------------------------------------  ----------------------
+#   agent name                crisis-coordination-agent              signal-zero-coordinator
+#   model                     custom/signal-zero-triage-fallback     nebius/signal-zero-triage
+#   temperature / max_tokens  0.1 / 4096                             0 / 4000
+#   iteration_limit           60                                     24
+#   ask_user_questions        enabled: true                          enabled: false
+#   mcp_servers               bright-data                            []
+#   compaction                trigger:{input_tokens, 90000}          compaction_threshold_tokens
+#   skills                    [] ("attaches NO skills")              3 registered, 0 attached
+#
+# THE MODEL NAME BELOW DOES NOT EXIST. Every agent block names
+# `custom/signal-zero-triage-fallback`; the only registered model is
+# `nebius/signal-zero-triage`. POSTing any manifest from this file verbatim
+# returns:
+#
+#     {"error":{"message":"Unknown model \"custom/signal-zero-triage-fallback\"
+#               - provider not configured"}}
+#
+# TRAP, VERIFIED BY POSTING IT: the `compaction: {trigger: {type, value}}` shape
+# documented below is SILENTLY DROPPED. An agent POSTed with it is accepted and
+# the manifest comes back as `compaction: {"enabled": true}` - the threshold
+# vanishes with no error and you get the default. See docs/trueforge-verified.md.
 #
 # -----------------------------------------------------------------------------
 # PROVENANCE - what is verified against upstream, and what is our own convention
@@ -166,18 +204,28 @@ sandbox_providers:
 # -----------------------------------------------------------------------------
 # SKILLS
 # Upstream file: packages/trueforge/catalog/skill-catalog.yaml (top-level key `skills:`)
-# Signal Zero attaches NO skills. Skills are git-backed SKILL.md packs sparse-cloned
-# into a sandbox, and attaching any of them would require `config.sandbox.enabled: true`
-# on every agent. Our agents are prompt-and-tools only. Left empty deliberately rather
-# than padded with entries we do not use.
+# THIS BLOCK IS STALE AND IS KEPT ONLY SO THE CORRECTION IS VISIBLE.
+# It used to read "Left empty deliberately rather than padded with entries we do not
+# use." That decision was later reversed: THREE skills are registered on the live
+# instance (GET /api/v1/settings/skills -> disaster-source-credibility,
+# nepal-settlement-resolution, no-dispatch-language).
+#
+# What remains true is that NO AGENT ATTACHES ONE, so they contribute zero tokens to
+# any turn. The honest status is AUTHORED, NOT MOUNTED. The blocker is not the schema
+# and no longer the platform gate (/api/v1/capabilities now reports sandbox.enabled
+# and skill.enabled true): it is that this container's sandbox bootstrap cannot reach
+# PyPI, so a skill-attached turn hangs in a retry loop. See scripts/load-agents.mjs.
 # -----------------------------------------------------------------------------
 skills: []
 
 # -----------------------------------------------------------------------------
 # AGENTS
-# BEST-EFFORT WRAPPER. TrueForge has no agent catalog file. Each `manifest:` below is
-# a real, verified AgentSpec - the exact body you would POST to /api/v1/agents as
-# {name, manifest}. `instructions_file` is our convention: the loader reads the .md,
+# BEST-EFFORT WRAPPER, AND ILLUSTRATIVE ONLY. TrueForge has no agent catalog file.
+# Each `manifest:` below is SHAPED like an AgentSpec, but it is NOT "the exact body
+# you would POST" - that claim was in this header and it was false: every block names
+# a model that does not exist, so POSTing one verbatim returns HTTP 400. See the
+# drift table at the top of this file. The bodies that are actually POSTed are built
+# by scripts/load-agents.mjs from agents/*.md frontmatter. `instructions_file` is our convention: the loader reads the .md,
 # strips its YAML frontmatter, and inlines the prose into `manifest.instructions`,
 # because AgentSpec.instructions is a plain string.
 # -----------------------------------------------------------------------------

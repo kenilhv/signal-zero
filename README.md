@@ -235,10 +235,25 @@ that underclaims.
 ## Sponsor integrations
 
 ### TrueForge — the agent harness
-[`trueforge.yaml`](./trueforge.yaml) is a TrueForge catalog declaring the model
-provider, the Bright Data MCP connector, the sandbox provider, and the five
-subagents in [`agents/`](./agents). Each agent's `manifest` is a real, verified
-TrueForge `AgentSpec`.
+
+**What is actually on the call path: one agent.** Triage tier 3 —
+`src/pipeline/triage.js:575` — is the only place in `src/` that opens a TrueForge
+session, and it binds by name to `signal-zero-triage-tier3`. That is not an
+oversight, it is Hard Rule 3: no LLM may touch dedup scoring or ranking math, so
+there is exactly one place an agent is allowed to run. Read the roster below as
+**one production agent plus four operator-run agents**, not as a multi-agent
+system: deleting the other four would not change a single byte of the product's
+output. What the binding does buy is real and is the claim worth checking — the
+model, the ~15k-character instructions, the iteration limit, the tool surface and
+the approval policy all live inside TrueForge, so editing the agent there changes
+this pipeline's behaviour with no redeploy.
+
+[`trueforge.yaml`](./trueforge.yaml) is an **illustrative** TrueForge catalog. It
+is not what registers the roster and it is not read by any code:
+`scripts/load-agents.mjs` builds every manifest from the `trueforge:` frontmatter
+in `agents/*.md`, which is the source of truth. Several fields in the YAML have
+drifted from the live registry and its header says so field by field; use
+`GET /api/v1/agents` for what is actually running.
 
 The file carries a provenance header separating what was **verified** against the
 upstream repo (`packages/trueforge/catalog/*.yaml`, the `agentSpec.ts` zod schema,
@@ -250,15 +265,29 @@ one honest mismatch: the TrueForge MCP catalog only accepts `type: remote` with 
 URL, so Bright Data is declared in its verified remote form rather than as an
 `npx` stdio server.
 
-The five subagents:
+The five registered agents. **Only the third one is reachable from `src/`**; the
+other four are run by hand (`scripts/verify-agents.mjs`, the TrueForge UI) and
+are marked as such rather than described as a delegation that no code path
+performs — `dynamic_sub_agents` does not dispatch to named registry agents, and
+nothing invokes the coordinator regardless.
 
-| Agent | Role |
-| --- | --- |
-| [`crisis-coordination-agent`](./agents/crisis-coordination-agent.md) | Root orchestrator. Sequences the six stages, delegates to the specialists, reports state. Cannot approve anything. |
-| [`ingestion-agent`](./agents/ingestion-agent.md) | Read-only collector. Preserves original URLs and timestamps; flags degraded sources instead of dropping data. |
-| [`triage-agent`](./agents/triage-agent.md) | Tier-3 fallback classifier. The only LLM touchpoint. Every decision carries quoted evidence and a written rationale. |
-| [`escalation-drafting-agent`](./agents/escalation-drafting-agent.md) | Prepares escalation packets. Empty tool list — it *cannot* send. Never names a destination or a recipient. |
-| [`architecture-review-agent`](./agents/architecture-review-agent.md) | Read-only auditor. Checks the codebase against the four hard rules with file-and-line evidence. |
+| Agent | On the call path? | Role |
+| --- | --- | --- |
+| [`crisis-coordination-agent`](./agents/crisis-coordination-agent.md) | no — operator-run | Root orchestrator persona. Sequences the six stages and reports state. Cannot approve anything. Nothing in `src/` creates a session against it. |
+| [`ingestion-agent`](./agents/ingestion-agent.md) | no — operator-run | Read-only collector; the live HITL proof in `scripts/verify-agents.mjs` runs against it. Ingest in the product itself is a plain `fetch` in `src/pipeline/ingest.js`. |
+| [`triage-agent`](./agents/triage-agent.md) | **YES — the only one** | Tier-3 fallback classifier. The only LLM touchpoint in the system. Every decision carries quoted evidence and a written rationale. |
+| [`escalation-drafting-agent`](./agents/escalation-drafting-agent.md) | no — operator-run | Prepares escalation packets. Empty tool list — it *cannot* send. Never names a destination or a recipient. |
+| [`architecture-review-agent`](./agents/architecture-review-agent.md) | no — operator-run | Read-only auditor. Checks the codebase against the four hard rules with file-and-line evidence. |
+
+**Skills: authored, not mounted.** Three skills are registered at
+`/api/v1/settings/skills` and no agent attaches one, so they contribute **zero
+tokens** to any turn this system runs. Skills mount into a sandbox; this
+container's sandbox bootstrap needs PyPI and has no route to it (it creates the
+sandbox, fails `pip install pydantic`, and retries in a loop), so attaching them
+would make turns hang rather than improve them. They are real work and they do
+measurably improve settlement resolution when their text is placed in context by
+hand — and none of that is a capability this system exercises. See
+`scripts/load-agents.mjs`, which refuses to attach them and prints why.
 
 ### Bright Data — ingestion
 Powers the INGEST stage's live web collection: news outlets, social posts, and

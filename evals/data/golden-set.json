@@ -1,0 +1,412 @@
+{
+  "$comment": "Signal Zero triage golden set. Hand-authored against src/data/gazetteer.json and the real 26 Aug 2026 Trishuli GLOF coverage. Labels state what a competent Nepali-desk analyst would conclude from the text ALONE, not what the current code happens to do. Where two categories are genuinely defensible the case carries categoryAny and says why; only 3 of 32 cases do.",
+  "labelKey": {
+    "settlementId": "the gazetteer id a correct system resolves to, or null when the honest answer is UNRESOLVED",
+    "mustNotResolveTo": "ids that would be an outright error (a district-level story pinned to one village, a river name pinned to a town)",
+    "category": "the single correct category",
+    "categoryAny": "used instead of category ONLY where the domain genuinely admits two answers",
+    "hard": "why this case is in the set"
+  },
+  "cases": [
+    {
+      "id": "g01",
+      "hard": "baseline - exact gazetteer name, official source, concrete on-the-ground status",
+      "report": {
+        "sourceType": "official",
+        "sourceName": "DEOC Nuwakot",
+        "title": "Betrawati: 40 households displaced",
+        "text": "Security personnel reached Betrawati this morning. Forty households were displaced after the flood and the bailey bridge is damaged."
+      },
+      "expect": { "settlementId": "np-nuwakot-betrawati", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g02",
+      "hard": "alias with a space - Nepali media write both 'Syabrubesi' and 'Syabru Besi'",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Setopati",
+        "title": "Syabru Besi bus park completely under water",
+        "text": "The bus park at Syabru Besi is completely under water. Shopkeepers say twelve vehicles were swept away and the lower row of shops is destroyed."
+      },
+      "expect": { "settlementId": "np-rasuwa-syabrubesi", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g03",
+      "hard": "transliteration variant - 'Shyaphrubesi' is how several outlets romanise the same place",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Nagarik News",
+        "title": "Rescue teams reach Shyaphrubesi",
+        "text": "Nepal Police personnel reached Shyaphrubesi late on Wednesday. Two people are confirmed dead and eleven households are displaced."
+      },
+      "expect": { "settlementId": "np-rasuwa-syabrubesi", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g04",
+      "hard": "compositional variant not present verbatim in the alias list ('Galchi Bazar')",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "The Himalayan Times",
+        "title": "Prithvi Highway undercut at Galchi Bazar",
+        "text": "The river undercut the carriageway at Galchi Bazar and the road is blocked in both directions. Two shops on the riverside were destroyed."
+      },
+      "expect": { "settlementId": "np-dhading-galchhi", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g05",
+      "hard": "local name differs completely from the official name - 'Dhading Besi' IS Nilkantha",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Kathmandu Post",
+        "title": "Relief staging hub set up at Dhading Besi",
+        "text": "The district administration has opened a relief staging hub at Dhading Besi. Relief materials were distributed to 260 displaced families on Thursday."
+      },
+      "expect": { "settlementId": "np-dhading-nilkantha", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g06",
+      "hard": "alias that shares no substring with the settlement name - 'Rasuwagadhi' IS Timure",
+      "report": {
+        "sourceType": "official",
+        "sourceName": "Nepal Police",
+        "title": "Press note: situation at Rasuwagadhi",
+        "text": "A police team reached Rasuwagadhi on foot. The customs yard is buried in debris and nine houses were destroyed. No casualties have been recorded at the post."
+      },
+      "expect": { "settlementId": "np-rasuwa-timure", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g07",
+      "hard": "official sitrep with a hard number - the strongest possible corroboration",
+      "report": {
+        "sourceType": "official",
+        "sourceName": "DEOC Rasuwa",
+        "title": "Shelter headcount at Dhunche: 412 persons",
+        "text": "The District Emergency Operation Centre at Dhunche records 412 persons in the three shelters as of 18:00. Relief distribution continues and the health post is operating."
+      },
+      "expect": { "settlementId": "np-rasuwa-dhunche", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g08",
+      "hard": "diacritics - 'Syābru-Besi' as printed with macrons and a hyphen must fold to the same place as 'Syabru Besi'",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Ratopati",
+        "title": "Syābru-Besi cut off after the surge",
+        "text": "Syābru-Besi remains cut off. Residents report that the health post building is damaged and forty families are sheltering at the school."
+      },
+      "expect": { "settlementId": "np-rasuwa-syabrubesi", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g09",
+      "hard": "THE INVERSE CASE. A report saying nobody has reached a place must never mark it corroborated.",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "X / @RasuwaLive",
+        "title": "Still no contact with Haku",
+        "text": "There has been no contact with Haku since Tuesday morning. The trail in is gone and nobody has walked in yet. Residents there are unaccounted for."
+      },
+      "expect": { "settlementId": "np-rasuwa-haku", "category": "hazard-signal" }
+    },
+    {
+      "id": "g10",
+      "hard": "administrative suffix - 'Bidur Municipality' must still resolve to Bidur",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Kathmandu Post",
+        "title": "Bidur Municipality evacuates riverside wards",
+        "text": "Bidur Municipality moved households out of wards 3 and 4 overnight. Around 600 residents are in temporary shelter and two homes were destroyed."
+      },
+      "expect": { "settlementId": "np-nuwakot-bidur", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g11",
+      "hard": "short-form alias - 'Belkot' for Belkotgadhi",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Nagarik News",
+        "title": "School at Belkot opened as shelter",
+        "text": "The secondary school at Belkot has been opened as a shelter for displaced families. Ninety people slept there on Thursday night."
+      },
+      "expect": { "settlementId": "np-nuwakot-belkotgadhi", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g12",
+      "hard": "full rural-municipality name - 'Benighat Rorang'",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "X / @DhadingKhabar",
+        "title": "Benighat Rorang: silt everywhere",
+        "text": "Benighat Rorang after the water went down: silt everywhere, fields buried, the irrigation channel is destroyed. Villagers are digging out by hand."
+      },
+      "expect": { "settlementId": "np-dhading-benighat", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g13",
+      "hard": "'Uttargaya Rural Municipality' - 'rural' must NOT be treated as a geographic-feature word the way 'river' is",
+      "report": {
+        "sourceType": "official",
+        "sourceName": "DEOC Rasuwa",
+        "title": "Damage survey in Uttargaya Rural Municipality",
+        "text": "A damage survey began in Uttargaya Rural Municipality on Friday. Forty-one houses are damaged and the suspension bridge to the far bank is destroyed."
+      },
+      "expect": { "settlementId": "np-rasuwa-uttargaya", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g14",
+      "hard": "social-media eyewitness - lower confidence than an official source but still a corroboration",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "X / @RasuwaLive",
+        "title": "Video from Syabrubesi: the whole bus park is gone",
+        "text": "Filmed from the ridge above Syabrubesi. The whole bus park is gone. People are on the terrace above the school. Two houses washed away."
+      },
+      "expect": { "settlementId": "np-rasuwa-syabrubesi", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g15",
+      "hard": "a place reporting itself UNDAMAGED is still a corroboration - we heard from it",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "X / @RasuwaLive",
+        "title": "Trek groups on the Gosaikunda route turned back",
+        "text": "Confirmed with two lodge owners: Gosaikunda itself is above the flood line and reported dry. No casualties at Gosaikunda. Roughly 40 trekkers waiting it out."
+      },
+      "expect": { "settlementId": "np-rasuwa-gosaikunda", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g16",
+      "hard": "THE DISTRICT CASE. A national story naming only 'Rasuwa district' must NOT be pinned to any village in Rasuwa - doing so would silently mark a settlement as covered.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "The Guardian",
+        "title": "Nearly 1,400 missing, mostly tourists, after Nepal-Tibet flash flood kills at least 356",
+        "text": "At least 356 people have been confirmed dead and nearly 1,400 are missing after a flash flood swept down from the Nepal-Tibet border. The worst-affected area is Rasuwa district, where the surge entered the Bhote Koshi from across the frontier. Rescue efforts are continuing across the district."
+      },
+      "expect": {
+        "settlementId": null,
+        "category": "hazard-signal",
+        "mustNotResolveTo": [
+          "np-rasuwa-timure",
+          "np-rasuwa-syabrubesi",
+          "np-rasuwa-haku",
+          "np-rasuwa-dhunche",
+          "np-rasuwa-gosaikunda",
+          "np-rasuwa-uttargaya",
+          "np-rasuwa-ramche",
+          "np-rasuwa-kalikasthan",
+          "np-rasuwa-thulogaun"
+        ]
+      }
+    },
+    {
+      "id": "g17",
+      "hard": "THE RIVER CASE. 'Trishuli river' is the river, not Trishuli Bazar the town.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Kathmandu Post",
+        "title": "Trishuli river swells after glacial lake outburst",
+        "text": "Water level in the Trishuli river rose sharply following a glacial lake outburst upstream. The Department of Hydrology issued a warning for communities downstream along the Trishuli river corridor."
+      },
+      "expect": {
+        "settlementId": null,
+        "category": "hazard-signal",
+        "mustNotResolveTo": ["np-nuwakot-trishuli-bazar"]
+      }
+    },
+    {
+      "id": "g18",
+      "hard": "A DIFFERENT FLOOD, ELSEWHERE IN NEPAL. Same hazard vocabulary, no corridor settlement.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Onlinekhabar",
+        "title": "Three killed as Melamchi river floods Barhabise in Sindhupalchok",
+        "text": "Three people were killed and eleven houses were destroyed when the Melamchi river burst its banks at Barhabise in Sindhupalchok district. Security personnel reached the site on Thursday morning and rescue work is under way."
+      },
+      "expect": {
+        "settlementId": null,
+        "categoryAny": ["hazard-signal", "noise"],
+        "whyAmbiguous": "LABEL REVISED 2026-08-30, see evals/README.md. Originally labelled hazard-signal only. A flood in Sindhupalchok is a real hazard report but it is outside this system's corridor, so 'noise' (off-topic for us) is at least as defensible as 'hazard-signal'. The revision does not touch the load-bearing part of the label: settlementId must still be null and mustNotResolveTo still applies.",
+        "mustNotResolveTo": [
+          "np-rasuwa-ramche",
+          "np-nuwakot-battar",
+          "np-dhading-benighat",
+          "np-rasuwa-haku"
+        ]
+      }
+    },
+    {
+      "id": "g19",
+      "hard": "A DIFFERENT FLOOD, DIFFERENT COUNTRY. Sikkim, not Nepal - and the vocabulary is identical.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Reuters",
+        "title": "Glacial lake outburst on the Teesta destroys homes in north Sikkim",
+        "text": "A glacial lake outburst flood on the Teesta river in north Sikkim, India, destroyed dozens of homes overnight. Rescue teams reached Chungthang on Tuesday. Fourteen people are missing."
+      },
+      "expect": {
+        "settlementId": null,
+        "categoryAny": ["hazard-signal", "noise"],
+        "whyAmbiguous": "LABEL REVISED 2026-08-30, see evals/README.md. Same reasoning as g18: a GLOF in Sikkim, India is a genuine hazard report and is also genuinely off-corridor. settlementId null and mustNotResolveTo are unchanged.",
+        "mustNotResolveTo": ["np-rasuwa-timure", "np-rasuwa-syabrubesi", "np-nuwakot-battar"]
+      }
+    },
+    {
+      "id": "g20",
+      "hard": "completely unrelated story - no hazard content at all",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Setopati",
+        "title": "Nepal seal the cricket series in Kirtipur",
+        "text": "The national side sealed the cricket series with a six-wicket win in Kirtipur on Tuesday. The final match of the tour is on Sunday."
+      },
+      "expect": { "settlementId": null, "category": "noise" }
+    },
+    {
+      "id": "g21",
+      "hard": "names a corridor settlement, but the story has nothing to do with the disaster. Resolving is fine; calling it a corroboration is NOT - it would reset the silence clock on a place nobody has actually checked.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Annapurna Post",
+        "title": "Book fair opens at Trishuli Bazar",
+        "text": "The annual district book fair opened at Trishuli Bazar on Sunday with 34 stalls. Organisers expect the tourist arrival numbers to match last year's festival lineup."
+      },
+      "expect": { "settlementId": "np-nuwakot-trishuli-bazar", "category": "noise" }
+    },
+    {
+      "id": "g22",
+      "hard": "AMBIGUOUS BY CONSTRUCTION. Two corridor settlements named, the status applies to the stretch between them, and attributing it to either one would falsely mark the other covered. UNRESOLVED is the correct answer.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Republica",
+        "title": "Road between Betrawati and Trishuli Bazar impassable",
+        "text": "The road between Betrawati and Trishuli Bazar is impassable after the flood. Crews are clearing debris from the carriageway. It is not yet clear which settlements along the stretch are reachable."
+      },
+      "expect": { "settlementId": null, "category": "hazard-signal" }
+    },
+    {
+      "id": "g23",
+      "hard": "AMBIGUOUS BY CONSTRUCTION. A list of affected places. Picking one is a guess.",
+      "report": {
+        "sourceType": "official",
+        "sourceName": "NEOC Situation Report",
+        "title": "National Situation Report No. 4 - Trishuli GLOF",
+        "text": "Affected areas include Haku, Timure and Dhunche. Assessment teams have not yet completed the survey and household-level figures are not available for any of the three."
+      },
+      "expect": { "settlementId": null, "category": "hazard-signal" }
+    },
+    {
+      "id": "g24",
+      "hard": "COLD START. An on-hazard report naming a settlement that is NOT in the gazetteer at all - the case the product exists to surface.",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "X / @RasuwaLive",
+        "title": "Debris buried the village of Thanku",
+        "text": "Debris from the surge buried the village of Thanku upstream of the highway. Villagers walked out over the ridge. The flood took the footbridge with it."
+      },
+      "expect": { "settlementId": null, "category": "new-settlement" }
+    },
+    {
+      "id": "g25",
+      "hard": "COLD START, second form - a hamlet marker rather than a village marker",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Onlinekhabar",
+        "title": "Chilime hamlet cut off after the flood",
+        "text": "Chilime hamlet remains cut off after the flood washed out the access track. The powerhouse road is submerged and residents are walking three hours to the highway."
+      },
+      "expect": { "settlementId": null, "category": "new-settlement" }
+    },
+    {
+      "id": "g26",
+      "hard": "place-less hazard bulletin. A warning about everyone is a corroboration for nobody.",
+      "report": {
+        "sourceType": "official",
+        "sourceName": "DHM Nepal",
+        "title": "Special hydrological bulletin: extreme discharge warning for the entire basin",
+        "text": "The Department of Hydrology and Meteorology issues a red-level warning. Gauge stations recorded a discharge spike consistent with a glacial lake outburst flood originating in the upper catchment. All riverside communities must move to higher ground immediately."
+      },
+      "expect": { "settlementId": null, "category": "hazard-signal" }
+    },
+    {
+      "id": "g27",
+      "hard": "WARNING FRAMING. A settlement is named, but the report is forward-looking. A warning is never a corroboration.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Ratopati",
+        "title": "Gajuri riverside settlements placed on alert",
+        "text": "Riverside settlements at Gajuri have been placed on alert. The district administration warned residents that the water level may rise further overnight and asked them to be on standby."
+      },
+      "expect": { "settlementId": "np-dhading-gajuri", "category": "hazard-signal" }
+    },
+    {
+      "id": "g28",
+      "hard": "negative contact with NO gazetteer place named. Valuable signal, but it attaches to nowhere.",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "Reddit r/Nepal",
+        "title": "Several upstream hamlets still unreachable",
+        "text": "Several upstream hamlets remain unreachable four days on. No word from any of them. Nobody has been able to confirm whether anyone is still there."
+      },
+      "expect": { "settlementId": null, "category": "hazard-signal" }
+    },
+    {
+      "id": "g29",
+      "hard": "BRIGHT DATA TRAP. The SERP payload's relative date was unparseable, so publishedAt is null. Classification must still work.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Republica",
+        "title": "Betrabati bridge collapse cuts the only road link to Rasuwa",
+        "text": "The bailey bridge at Betrabati collapsed, cutting the only road link to Rasuwa. Forty households in the settlement are displaced and the health post is damaged.",
+        "publishedAt": null
+      },
+      "expect": { "settlementId": "np-nuwakot-betrawati", "category": "corroboration-candidate" }
+    },
+    {
+      "id": "g30",
+      "hard": "explainer piece. Full of hazard vocabulary, about nowhere. 'noise' and 'hazard-signal' are both defensible: it carries no settlement information either way.",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "BBC Nepali",
+        "title": "Explainer: what is a glacial lake outburst flood and why are they getting more common",
+        "text": "A glacial lake outburst flood happens when a moraine dam holding back meltwater fails. Warming has increased the number of such lakes across the Hindu Kush Himalaya over the past three decades."
+      },
+      "expect": {
+        "settlementId": null,
+        "categoryAny": ["hazard-signal", "noise"],
+        "whyAmbiguous": "an explainer carries hazard vocabulary but no event and no place; either label is honest, and neither creates or destroys coverage"
+      }
+    },
+    {
+      "id": "g31",
+      "hard": "aggregator slop - a real pattern in scraped social feeds. Low information, hazard words present.",
+      "report": {
+        "sourceType": "social",
+        "sourceName": "Reddit r/Nepal",
+        "title": "nepal flood update roundup - auto posted",
+        "text": "nepal flood update roundup auto posted from feed. flood flood update thread. see comments for links."
+      },
+      "expect": {
+        "settlementId": null,
+        "categoryAny": ["noise", "hazard-signal"],
+        "whyAmbiguous": "content-free aggregation; the only firm requirement is that it must not resolve to a settlement or count as a corroboration"
+      }
+    },
+    {
+      "id": "g32",
+      "hard": "a settlement name appearing only as the byline location, with the story about somewhere else entirely",
+      "report": {
+        "sourceType": "news",
+        "sourceName": "Kathmandu Post",
+        "title": "Three injured as bus overturns near Narayanghat in Chitwan",
+        "text": "BATTAR - Three passengers were injured when a bus overturned on the Narayanghat road in Chitwan on Wednesday evening. Police said the driver lost control on a wet bend.",
+        "publishedAt": "2026-08-29T04:00:00.000Z"
+      },
+      "expect": {
+        "settlementId": null,
+        "categoryAny": ["noise", "hazard-signal"],
+        "whyAmbiguous": "a dateline is not evidence about the datelined place; the firm requirement is that this must not become a corroboration for Battar",
+        "mustNotBeCorroborationFor": "np-nuwakot-battar"
+      }
+    }
+  ]
+}

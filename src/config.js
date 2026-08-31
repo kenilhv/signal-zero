@@ -36,6 +36,33 @@ export const OPENAI_API_KEY = str('OPENAI_API_KEY', '');
 export const OPENAI_BASE_URL = str('OPENAI_BASE_URL', 'https://api.openai.com/v1');
 export const OPENAI_MODEL = str('OPENAI_MODEL', 'gpt-4o-mini');
 
+// TrueForge agent harness. Triage tier 3 - the one and only LLM touchpoint in
+// Signal Zero - is executed as a TrueForge session turn rather than as a raw
+// call to a model endpoint. The harness owns the agent loop; we read the result
+// out of the turn it ran.
+//
+// Nothing here is load-bearing. If the harness is switched off or unreachable,
+// tier 3 falls back to the direct OPENAI_* fetch below and writes a visible
+// incident saying the fallback ran. See src/harness/trueforge.js.
+export const TRUEFORGE_ENABLED = bool('TRUEFORGE_ENABLED', true);
+export const TRUEFORGE_BASE_URL = str('TRUEFORGE_BASE_URL', 'http://localhost:4000');
+// Must be a `provider/model` name registered in that TrueForge instance
+// (GET /api/v1/models lists them). Not our OPENAI_MODEL: the harness resolves
+// the model through its own stored provider credentials.
+export const TRUEFORGE_MODEL = str('TRUEFORGE_MODEL', 'nebius/signal-zero-triage');
+// The NAMED agent in the TrueForge registry that executes triage tier 3.
+// scripts/load-agents.mjs registers it from agents/triage-agent.md, so the model,
+// instructions, iteration limit, tool surface and approval policy all live in
+// TrueForge - not in this repo. We bind a session to it BY NAME
+// (`{"agent":{"name":"..."}}`), which is what makes the harness the thing doing
+// the work rather than a transport we happen to POST through.
+// If the name is not registered, tier 3 degrades to an inline AgentSpec and says
+// so on the incident feed; it never silently pretends the roster was used.
+export const TRUEFORGE_AGENT = str('TRUEFORGE_AGENT', 'signal-zero-triage-tier3');
+// Wall-clock budget for one classification turn, poll included.
+export const TRUEFORGE_TIMEOUT_MS = int('TRUEFORGE_TIMEOUT_MS', 15000);
+export const TRUEFORGE_POLL_MS = int('TRUEFORGE_POLL_MS', 350);
+
 // Live scraping only makes sense when we actually have a Bright Data token.
 export const USE_LIVE_SCRAPE = bool('USE_LIVE_SCRAPE', false) && BRIGHTDATA_API_TOKEN !== '';
 
@@ -45,6 +72,12 @@ export const config = {
   OPENAI_API_KEY,
   OPENAI_BASE_URL,
   OPENAI_MODEL,
+  TRUEFORGE_ENABLED,
+  TRUEFORGE_BASE_URL,
+  TRUEFORGE_MODEL,
+  TRUEFORGE_AGENT,
+  TRUEFORGE_TIMEOUT_MS,
+  TRUEFORGE_POLL_MS,
   USE_LIVE_SCRAPE
 };
 

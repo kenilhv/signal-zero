@@ -125,6 +125,62 @@ export function popRadius(population) {
   return Math.max(5, Math.min(22, 5 + 16 * Math.sqrt(p / 25000)));
 }
 
+// ── the three kinds of silence (docs/three-kinds-of-silence.md) ────────────
+// The live field carries three materially different states and they are not
+// equally meaningful. Flattening them into one "silenceHours" axis hides the
+// strongest claim the product has.
+//
+//   never   coverageBasis "cohort-cold-start" — NO REPORT HAS EVER RESOLVED
+//           here. Weak signal: we cannot separate "quiet" from "nobody looked".
+//           This must never be rendered as confirmed silence.
+//   stopped coverageBasis "reports", at least one report, and nothing since
+//           STOPPED_AFTER_HOURS. Coverage existed and then ceased. This is the
+//           strongest signal in the system.
+//   recent  heard from inside the window. Not silent.
+//
+// Every count derived from this is computed from live rows at render time.
+// Nothing here is hard-coded to a number that appeared in a past run.
+
+export const STOPPED_AFTER_HOURS = 24;
+
+export function silenceKind(row) {
+  if (!row) return 'never';
+  if (row.coverageBasis === 'cohort-cold-start') return 'never';
+  const reports = Number(row.reportCount);
+  const hours = Number(row.silenceHours);
+  if (Number.isFinite(reports) && reports >= 1 &&
+      Number.isFinite(hours) && hours >= STOPPED_AFTER_HOURS) return 'stopped';
+  return 'recent';
+}
+
+// Wording note (skills/no-dispatch-language): none of these labels may say what
+// a settlement DID. "Went dark" and "stopped reporting" assert a fact about the
+// place; all we observe is what reached our inbox. Every label below is phrased
+// as a statement about arriving reports, not about the settlement.
+export const KINDS = {
+  never: {
+    glyph: '◌', short: 'no report ever', word: 'no report has ever reached us',
+    label: 'No report has ever resolved here. This is an absence of data, not a confirmed silence. ' +
+           'Whether the place is quiet, unreachable or simply unreported is not determinable from this.'
+  },
+  stopped: {
+    glyph: '◐', short: 'stopped', word: 'reports reached us, then stopped',
+    label: `Reports resolved here, and then nothing for ${STOPPED_AFTER_HOURS} hours or more. ` +
+           'Coverage existed and then ceased. A gap in our sources still looks identical to a gap on the ground.'
+  },
+  recent: {
+    glyph: '●', short: 'recent', word: 'a report reached us recently',
+    label: `A report resolved here within the last ${STOPPED_AFTER_HOURS} hours.`
+  }
+};
+
+/** { never:[], stopped:[], recent:[] } — always all three keys, never undefined. */
+export function groupByKind(rowList) {
+  const out = { never: [], stopped: [], recent: [] };
+  for (const r of rowList || []) out[silenceKind(r)].push(r);
+  return out;
+}
+
 // ── anomaly types (qualitative — encoded by SHAPE on the map) ───────────────
 
 export const ANOMALY = {
@@ -154,6 +210,11 @@ export const INCIDENT_KINDS = {
   'llm-fallback':    { glyph: '◆', label: 'LLM FALLBACK' },
   'cold-start':      { glyph: '◌', label: 'COLD START' },
   heal:              { glyph: '●', label: 'RECOVERED' },
+  // A refusal is not a fault and must not read as one. The tier-3 agent
+  // declining a request that would break a hard rule is the system working;
+  // logging it under 'llm-fallback' made the best thing that can happen
+  // indistinguishable from a crash.
+  'agent-refusal':   { glyph: '⊘', label: 'AGENT REFUSED' },
   local:             { glyph: '·', label: 'LOCAL' }
 };
 
@@ -184,6 +245,15 @@ export function coverageChip(row) {
     }, h('span', { 'aria-hidden': 'true' }, '◌'), ' no data reached us');
   }
   const n = num(row.reportCount);
+  const kind = silenceKind(row);
+  if (kind === 'stopped') {
+    return h('span', {
+      class: 'chip chip-stopped',
+      title: KINDS.stopped.label,
+      'aria-label': KINDS.stopped.label
+    }, h('span', { 'aria-hidden': 'true' }, KINDS.stopped.glyph),
+      ` ${n === null ? 'reports' : n + ' report' + (n === 1 ? '' : 's')} reached us, then stopped`);
+  }
   return h('span', { class: 'chip chip-reports' },
     h('span', { 'aria-hidden': 'true' }, '●'),
     ` ${n === null ? '—' : n} report${n === 1 ? '' : 's'}`);
@@ -256,4 +326,100 @@ export function throttleRaf(fn) {
     try { requestAnimationFrame(run); } catch { /* no rAF at all */ }
     timer = setTimeout(run, 120);
   };
+}
+
+// ── plain-language duration and counts ─────────────────────────────────────
+// The landing view and the board must be readable by someone who has never seen
+// the product. "96.0h" is precise and opaque; "4d 0h" is precise and legible.
+// Both formatters carry the real value - nothing is rounded away silently.
+
+/** Compact, comparison-safe: "4d 0h" / "13h 24m" / "48m". Never invents a value. */
+export function fmtDuration(v) {
+  const n = num(v);
+  if (n === null) return '—';
+  if (n < 1) return `${Math.round(n * 60)}m`;
+  if (n < 48) {
+    const hrs = Math.floor(n);
+    const mins = Math.round((n - hrs) * 60);
+    return mins ? `${hrs}h ${String(mins).padStart(2, '0')}m` : `${hrs}h`;
+  }
+  const d = Math.floor(n / 24);
+  const hrs = Math.round(n - d * 24);
+  return hrs ? `${d}d ${hrs}h` : `${d}d`;
+}
+
+/** Prose form for the one headline sentence: "96 hours" / "4 days". */
+export function fmtDurationWords(v) {
+  const n = num(v);
+  if (n === null) return 'an unrecorded length of time';
+  if (n < 2) return `${n.toFixed(1)} hours`;
+  if (n < 72) return `${Math.floor(n)} hours`;
+  const d = Math.floor(n / 24);
+  return `${d} day${d === 1 ? '' : 's'}`;
+}
+
+/** Population with its unit attached, because a bare integer is ambiguous. */
+export function fmtPeople(v) {
+  const n = num(v);
+  return n === null ? 'population not recorded' : `${n.toLocaleString('en-US')} people`;
+}
+
+// ── motion helpers ─────────────────────────────────────────────────────────
+// Three motion weights exist on this console and no more: the hero count-up,
+// the list stagger, and nothing. Both helpers below degrade to the FINAL STATE
+// under prefers-reduced-motion rather than to a shortened animation, because
+// the information (the number, the ordering) must not depend on the movement.
+
+/**
+ * Monotonic ease-out count. A grim number must never overshoot and correct
+ * itself, so the easing is cubic ease-out (1-(1-t)^3) rather than anything
+ * elastic — it approaches the target from below and stops.
+ * Does nothing at all when the rendered value already equals `to`, so a poll
+ * that changed nothing produces no motion.
+ */
+export function countUp(node, to, opts = {}) {
+  if (!node) return;
+  const target = num(to);
+  if (target === null) { node.textContent = '—'; return; }
+  const format = opts.format || ((v) => String(Math.round(v)));
+  const final = format(target);
+  // First appearance counts from zero; after that, from the value on screen.
+  // A poll that did not move the number produces no motion at all — motion
+  // with no informational delta is decoration.
+  const seen = num(node.dataset.countValue);
+  const from = seen === null ? (opts.from ?? 0) : seen;
+
+  node.dataset.countValue = String(target);
+  if (reduced || from === target || opts.animate === false) {
+    node.textContent = final;
+    return;
+  }
+
+  // Timer-driven, not requestAnimationFrame-driven, and deliberately so.
+  // Some environments throttle or entirely suspend rAF (background tabs, power
+  // saving, a compositor that is not painting) — this is the same hazard
+  // throttleRaf below documents. This number is the product's headline claim;
+  // it must never be left blank because a frame did not arrive.
+  const dur = opts.duration ?? 900;
+  const t0 = Date.now();
+  clearInterval(node._countTimer);
+  node.textContent = format(from);
+  const tick = () => {
+    if (!node.isConnected) { clearInterval(node._countTimer); return; }
+    const t = Math.min(1, (Date.now() - t0) / dur);
+    const e = 1 - Math.pow(1 - t, 3);      // monotonic ease-out — never overshoots
+    node.textContent = t >= 1 ? final : format(from + (target - from) * e);
+    if (t >= 1) clearInterval(node._countTimer);
+  };
+  node._countTimer = setInterval(tick, 16);
+}
+
+/**
+ * Per-row stagger index. 28ms per row is the crafted band; the total sweep is
+ * capped at 900ms so a larger gazetteer cannot produce a multi-second
+ * waterfall. Returns the step actually used, in ms.
+ */
+export function staggerStep(count, per = 28, cap = 900) {
+  if (!count || count < 2) return 0;
+  return Math.min(per, cap / count);
 }

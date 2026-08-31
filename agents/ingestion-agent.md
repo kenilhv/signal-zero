@@ -1,6 +1,29 @@
 ---
 name: ingestion-agent
 description: Collects news, social and official reports about the Trishuli GLOF from the live web via the Bright Data MCP connector, normalises them into Report records, and reports source degradation instead of hiding it. Read-only. Never classifies, never scores, never ranks.
+trueforge:
+  agent_name: signal-zero-ingest
+  role: COLLECTOR
+  stage: ingest
+  model: nebius/signal-zero-triage
+  temperature: 0
+  max_tokens: 4000
+  iteration_limit: 14
+  # Bounds the SESSION, which iteration_limit does not: every approval resume
+  # starts a fresh turn and resets iteration_limit, so an unbudgeted collector
+  # scrapes forever and never emits its contract. Observed, then fixed.
+  tool_call_budget: 6
+  dynamic_sub_agents: false
+  sandbox: false
+  compaction_threshold_tokens: 60000
+  large_tool_response: true
+  mcp_servers:
+    - name: bright-data
+      enable_tools: ["@read-only"]
+      require_approval_for_tools: ["@all"]
+      preload: true
+  skills_match: [disaster-source-credibility]
+  skills_max: 1
 ---
 
 # Ingestion Agent

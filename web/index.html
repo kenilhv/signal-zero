@@ -5,23 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Signal Zero — Coordinator Console</title>
 <meta name="description" content="Signal Zero ranks settlements by anomalously long silence, not by report volume. Trishuli GLOF response console." />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1015'/%3E%3Ccircle cx='16' cy='16' r='8.5' fill='none' stroke='%23e0a32b' stroke-width='2.5'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23e0a32b'/%3E%3C/svg%3E" />
+<meta name="color-scheme" content="light dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A0C0F'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%236BA8FF' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%236BA8FF'/%3E%3C/svg%3E" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
+<!-- Two families, no more. Archivo carries the finding AND the interface, so
+     hierarchy is made by size alone (Vignelli), not by swapping voices; it is a
+     news-gothic with an institutional register and is not Inter. JetBrains Mono
+     carries every digit that gets compared, with tabular figures on. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"></noscript>
 
 <link rel="stylesheet" href="vendor/maplibre-gl.css" />
 <link rel="stylesheet" href="styles.css" />
 </head>
-<body data-layout="wide" data-tab="rank">
+<body data-view="overview" data-stats="off">
 
-<a class="skip" href="#region-rank">Skip to rank list</a>
-<a class="skip" href="#region-map">Skip to map</a>
-<a class="skip" href="#region-checkpoint">Skip to checkpoint queue</a>
+<a class="skip" href="#region-rank">Skip to the silence board</a>
+<a class="skip" href="#region-checkpoint">Skip to pending decisions</a>
+<a class="skip" href="#region-map">Skip to the map</a>
 
-<!-- ═════════════ A · COMMAND BAR ═════════════ -->
-<header class="cmdbar" role="banner">
+<!-- ═════════════ TOP BAR ═════════════ -->
+<header class="topbar" role="banner">
   <div class="brand">
     <span class="brand-mark" aria-hidden="true"><i></i></span>
     <span class="brand-text">
@@ -30,199 +36,256 @@
     </span>
   </div>
 
-  <span class="scenario" title="Demo scenario">Trishuli GLOF · Rasuwa / Nuwakot / Dhading · 26 Aug 2026</span>
+  <span class="scenario">Trishuli GLOF · Rasuwa / Nuwakot / Dhading · 26 Aug 2026</span>
 
-  <div class="rail" id="stage-rail" aria-label="Pipeline progress">
-    <div class="rail-track" id="rail-track"></div>
-    <div class="rail-meta"><span id="rail-sub">Waiting for first state…</span></div>
-    <p class="vh" id="rail-announce" aria-live="polite"></p>
-  </div>
+  <div class="top-actions">
+    <button class="btn btn-ghost" id="btn-run" type="button">Run pipeline</button>
 
-  <button class="pending-pill" id="pending-pill" type="button" hidden>
-    <span aria-hidden="true">⏸</span> <span id="pending-pill-n">0</span> waiting
-  </button>
-
-  <div class="stats" id="stats">
-    <span class="stat"><b id="stat-reports">—</b><small>reports</small></span>
-    <span class="stat stat-clusters"><b id="stat-clusters">—</b><small>clusters</small></span>
-    <span class="stat"><b id="stat-lastrun">—</b><small>last run</small></span>
-  </div>
-
-  <button class="btn btn-primary" id="btn-run" type="button">Run pipeline</button>
-
-  <div class="theme-toggle" role="group" aria-label="Colour theme">
-    <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
-    <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
-    <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
-  </div>
-
-  <details class="demo" id="demo-menu">
-    <summary aria-label="Demo failures">Demo failures</summary>
-    <div class="demo-body">
-      <p>Simulated faults. Everything they produce is tagged <span class="chip chip-sim">SIMULATED</span>.</p>
-      <button type="button" class="btn btn-ghost" data-fail="source">Break a source</button>
-      <button type="button" class="btn btn-ghost" data-fail="ambiguous">Force ambiguous match</button>
-      <button type="button" class="btn btn-ghost" data-fail="coldstart">Force cold-start</button>
+    <div class="theme-toggle" role="group" aria-label="Colour theme">
+      <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+      <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
     </div>
-  </details>
+
+    <details class="demo" id="demo-menu">
+      <summary aria-label="Demo failure triggers">Demo failures</summary>
+      <div class="demo-body">
+        <p>Simulated faults. Everything they produce is tagged <span class="chip chip-sim">SIMULATED</span>.</p>
+        <button type="button" class="btn btn-ghost" data-fail="source">Break a source</button>
+        <button type="button" class="btn btn-ghost" data-fail="ambiguous">Force ambiguous match</button>
+        <button type="button" class="btn btn-ghost" data-fail="coldstart">Force cold-start</button>
+      </div>
+    </details>
+  </div>
 </header>
 
 <div class="api-banner" id="api-banner" role="alert" aria-live="assertive" hidden></div>
 
-<!-- ═════════════ TAB BAR (≤1023px) ═════════════ -->
-<nav class="tabbar" id="tabbar" role="tablist" aria-label="Console regions" hidden>
-  <button role="tab" data-tab="rank"       aria-selected="true"  id="tab-rank">Rank</button>
-  <button role="tab" data-tab="evidence"   aria-selected="false" id="tab-evidence" tabindex="-1">Evidence</button>
-  <button role="tab" data-tab="checkpoint" aria-selected="false" id="tab-checkpoint" tabindex="-1">Checkpoint <span class="tab-badge" id="tab-badge" hidden>0</span></button>
-  <button role="tab" data-tab="activity"   aria-selected="false" id="tab-activity" tabindex="-1">Activity</button>
-  <button role="tab" data-tab="sources"    aria-selected="false" id="tab-sources" tabindex="-1">Sources</button>
+<!-- ═════════════ VIEW NAVIGATION ═════════════
+     Four jobs, four rooms:
+       situation  — what is happening (the finding, the board, the ground)
+       decisions  — what the agent is waiting on (carries a live count badge)
+       settlement — the evidence behind one place, and every statistic
+       activity   — what the agent did, and whether its sources are alive
+     Real ARIA tabs. Arrow keys move, 1-4 jump, and the selected panel is
+     written to the URL hash (#v/decisions) so any view can be linked. -->
+<nav class="viewnav" id="viewnav" role="tablist" aria-label="Console views">
+  <button role="tab" id="tab-overview"   data-view="overview"   data-tab="overview"   aria-selected="true"  aria-controls="view-overview"><span class="vn-k" aria-hidden="true">1</span>Situation</button>
+  <button role="tab" id="tab-decisions"  data-view="decisions"  data-tab="checkpoint" aria-selected="false" tabindex="-1" aria-controls="view-decisions"><span class="vn-k" aria-hidden="true">2</span>Decisions <span class="nav-badge" id="nav-badge" hidden>0</span></button>
+  <button role="tab" id="tab-settlement" data-view="settlement" data-tab="evidence"   aria-selected="false" tabindex="-1" aria-controls="view-settlement"><span class="vn-k" aria-hidden="true">3</span>Settlement</button>
+  <button role="tab" id="tab-activity"   data-view="activity"   data-tab="activity"   aria-selected="false" tabindex="-1" aria-controls="view-activity"><span class="vn-k" aria-hidden="true">4</span>Agent activity</button>
+  <span class="nav-hint" aria-hidden="true">1–4 switch view · / filters the board · r resets the map</span>
 </nav>
 
-<main class="console">
+<main class="stage" id="stage">
 
-  <!-- ═════════════ B · SILENCE RANK ═════════════ -->
-  <section class="region region-rank tabbed" id="region-rank" aria-labelledby="h-rank" data-tab-panel="rank">
-    <header class="region-head">
-      <h2 id="h-rank">Silence Rank <span class="count-pill" id="rank-count">—</span></h2>
-      <div class="filter-row">
-        <div class="seg" role="group" aria-label="Filter by category">
-          <button type="button" data-filt="all" aria-pressed="true">All <b id="f-all">0</b></button>
-          <button type="button" data-filt="anom" aria-pressed="false">Anomalies <b id="f-anom">0</b></button>
-          <button type="button" data-filt="nodata" aria-pressed="false">No data <b id="f-nodata">0</b></button>
-        </div>
-        <label class="vh" for="rank-filter">Filter settlements</label>
-        <input id="rank-filter" type="search" placeholder="Filter settlements…" autocomplete="off" />
+  <!-- ═════════════ 1 · SITUATION (landing) ═════════════
+       One sentence built entirely from live data, then the thing that is
+       waiting on a human, then the board and the ground it describes. -->
+  <section class="view view-overview is-active" id="view-overview" role="tabpanel"
+           aria-labelledby="tab-overview" tabindex="-1">
+
+    <div class="finding" id="finding-wrap">
+      <div class="finding-main">
+        <h1 class="finding-line" id="finding">
+          <span class="skel skel-finding" aria-hidden="true"></span>
+          <span class="vh">Waiting for the first state from the console API.</span>
+        </h1>
+        <!-- Announced once when the sentence settles, so a screen reader is not
+             read every frame of the count-up. -->
+        <p class="vh" id="finding-live" aria-live="polite"></p>
+        <p class="finding-b" id="finding-b"></p>
       </div>
-    </header>
-    <div class="region-body" id="rank-body">
-      <table class="rank-table" id="rank-table">
-        <thead>
-          <tr>
-            <th scope="col" class="c-rank"><button type="button" data-sort="rank" aria-sort="ascending" title="Server rank: Gi* desc, then surprisal, then population, then id. Deterministic.">#</button></th>
-            <th scope="col" class="c-name"><button type="button" data-sort="name" aria-sort="none">Settlement</button></th>
-            <th scope="col" class="c-sil"><button type="button" data-sort="silenceHours" aria-sort="none">Silent</button></th>
-            <th scope="col" class="c-gi"><button type="button" data-sort="giZScore" aria-sort="none">Gi* z</button></th>
-            <th scope="col" class="c-corr"><button type="button" data-sort="corroborationCount" aria-sort="none">Corr</button></th>
-          </tr>
-        </thead>
-        <tbody id="rank-rows"></tbody>
-      </table>
-      <div id="rank-empty"></div>
+      <div class="finding-side">
+        <p class="finding-sub" id="finding-sub">
+          <b>Silence means no report reached us.</b> It is not a confirmation that a place is quiet,
+          and this console never says where anyone should go. A named human decides everything
+          that follows.
+        </p>
+        <p class="finding-note" id="finding-note"></p>
+      </div>
+    </div>
+
+    <!-- The count a stranger must find in seconds. Full width, above the fold,
+         directly under the finding, and repeated in the tab badge and the
+         status bar. -->
+    <div class="human-band" id="human-band" hidden>
+      <span class="hb-glyph" aria-hidden="true">▮</span>
+      <p class="hb-text" id="human-band-text"></p>
+      <button class="btn btn-primary" type="button" id="human-band-go">Review the queue</button>
+    </div>
+
+    <div class="overview-grid">
+      <!-- ── the silence board ────────────────────────────────────────────── -->
+      <section class="board" id="region-rank" aria-labelledby="h-rank">
+        <header class="board-head">
+          <h2 id="h-rank">Silence board <span class="board-count" id="rank-count">—</span></h2>
+          <div class="board-filters">
+            <div class="seg" role="group" aria-label="Filter settlements">
+              <button type="button" data-filt="all" aria-pressed="true">All <b id="f-all">0</b></button>
+              <button type="button" data-filt="nodata" aria-pressed="false" title="No report has ever resolved to these settlements">No report ever <b id="f-nodata">0</b></button>
+              <button type="button" data-filt="stopped" aria-pressed="false" title="Reports reached us and then stopped — coverage existed and then ceased">Reports stopped <b id="f-stopped">0</b></button>
+              <button type="button" data-filt="anom" aria-pressed="false">Flagged <b id="f-anom">0</b></button>
+            </div>
+            <label class="vh" for="rank-filter">Filter settlements by name or district</label>
+            <input id="rank-filter" type="search" placeholder="Filter by name or district…" autocomplete="off" />
+          </div>
+        </header>
+        <div class="board-body" id="rank-body">
+          <table class="rank-table" id="rank-table">
+            <caption class="vh">Settlements ranked by how anomalously long they have been silent. Two figures per row; open “why this ranks here” for the full statistics.</caption>
+            <thead>
+              <tr>
+                <th scope="col" class="c-rank"><button type="button" data-sort="rank" aria-sort="ascending"
+                  title="Server rank: Gi* descending, then surprisal, then population, then settlement id. Deterministic — this console does not compute it.">#</button></th>
+                <th scope="col" class="c-name"><button type="button" data-sort="name" aria-sort="none">Settlement</button></th>
+                <th scope="col" class="c-sil n"><button type="button" data-sort="silenceHours" aria-sort="none">Silent for</button></th>
+                <th scope="col" class="c-pop n"><button type="button" data-sort="population" aria-sort="none">People</button></th>
+                <th scope="col" class="c-kind">Coverage</th>
+                <th scope="col" class="c-why"><span class="vh">Why this ranks here</span></th>
+              </tr>
+            </thead>
+            <tbody id="rank-rows"></tbody>
+          </table>
+          <div id="rank-empty"></div>
+        </div>
+        <p class="board-foot" id="board-foot"></p>
+      </section>
+
+      <!-- ── the ground ───────────────────────────────────────────────────── -->
+      <section class="overview-map region-map" id="region-map" aria-labelledby="h-map" aria-describedby="map-desc">
+        <h2 id="h-map" class="vh">Terrain map of the Trishuli corridor</h2>
+        <p id="map-desc" class="vh">A visual map. The same settlements are listed, with the same figures, on the silence board beside it.</p>
+
+        <div class="map-canvas" id="map-canvas"></div>
+        <div class="map-markers" id="map-markers"></div>
+
+        <div class="map-tools">
+          <div class="seg seg-map" role="group" aria-label="Basemap">
+            <button type="button" data-basemap="terrain" aria-pressed="true">Terrain</button>
+            <button type="button" data-basemap="street" aria-pressed="false">Street</button>
+            <button type="button" data-basemap="plain" aria-pressed="false">Plain</button>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-reset-view" title="Reset view (r)">Reset view</button>
+        </div>
+
+        <div class="map-banner" id="map-banner" hidden></div>
+        <div class="map-status" id="map-status">Loading terrain…</div>
+        <div class="map-tip" id="map-tip" hidden></div>
+
+        <!-- Folded by default: opened it covers a quarter of the map, and the
+             same encoding is spelled out in words on the board. -->
+        <details class="legend" id="legend">
+          <summary>How to read the map</summary>
+          <div class="legend-body">
+            <div class="legend-block">
+              <span class="legend-title">Silence duration</span>
+              <div class="ramp" id="ramp"></div>
+              <div class="ramp-ends"><span>0h</span><span>96h+</span></div>
+              <p class="legend-cap">how long since a report resolved here</p>
+            </div>
+            <div class="legend-block">
+              <span class="legend-title">Anomaly type</span>
+              <ul class="legend-rings" id="legend-rings"></ul>
+            </div>
+            <div class="legend-block">
+              <span class="legend-title">Also on the map</span>
+              <ul class="legend-misc">
+                <li><span class="sw sw-hatch" aria-hidden="true"></span>hatched = no report has ever reached us (cold start)</li>
+                <li><span class="sw sw-size" aria-hidden="true"></span>marker size = population</li>
+                <li><span class="sw sw-line" aria-hidden="true"></span>river-corridor adjacency (the Gi* graph)</li>
+                <li><span class="sw sw-pause" aria-hidden="true">▮</span>a human decision is pending here</li>
+              </ul>
+            </div>
+            <p class="legend-foot">Silence = no report reached us. Not a confirmation that a place is quiet.</p>
+          </div>
+        </details>
+
+        <div class="map-attrib" id="map-attrib">© Esri, Maxar, Earthstar Geographics · © OpenStreetMap contributors · Elevation: Mapzen/AWS Terrain Tiles</div>
+      </section>
     </div>
   </section>
 
-  <div class="col-center">
-    <!-- ═════════════ C · TERRAIN MAP ═════════════ -->
-    <section class="region region-map" id="region-map" aria-labelledby="h-map" aria-describedby="map-desc">
-      <h2 id="h-map" class="vh">Terrain map of the Trishuli corridor</h2>
-      <p id="map-desc" class="vh">A visual map. The same 32 settlements are listed in the Silence Rank table.</p>
+  <!-- ═════════════ 2 · DECISIONS ═════════════ -->
+  <section class="view view-decisions" id="view-decisions" role="tabpanel" aria-labelledby="tab-decisions"
+           tabindex="-1" hidden>
+    <header class="cp-lead" id="region-checkpoint">
+      <h2 class="cp-lead-line" id="cp-lead-line">No decisions are pending.</h2>
+      <p id="cp-lead-sub">Escalations appear here when a settlement's silence clears the escalation gate.
+        Nothing becomes actionable until a named human signs for it, and that name cannot be edited afterwards.</p>
+    </header>
+    <div class="view-body" id="checkpoint-body"></div>
+  </section>
 
-      <div class="map-canvas" id="map-canvas"></div>
-      <div class="map-markers" id="map-markers"></div>
-
-      <div class="map-tools">
-        <div class="seg seg-map" role="group" aria-label="Basemap">
-          <button type="button" data-basemap="terrain" aria-pressed="true">Terrain</button>
-          <button type="button" data-basemap="street" aria-pressed="false">Street</button>
-          <button type="button" data-basemap="plain" aria-pressed="false">Plain</button>
-        </div>
-        <button type="button" class="btn btn-ghost btn-sm" id="btn-reset-view" title="Reset view (r)">Reset view</button>
+  <!-- ═════════════ 3 · SETTLEMENT ═════════════ -->
+  <section class="view view-settlement" id="view-settlement" role="tabpanel" aria-labelledby="tab-settlement"
+           tabindex="-1" hidden>
+    <header class="set-head" id="region-evidence">
+      <div class="set-title">
+        <h2 id="set-name">Nothing selected</h2>
+        <p id="set-district">Pick a settlement on the map or on the silence board.</p>
       </div>
+      <div class="set-facts" id="set-facts"></div>
+    </header>
+    <div class="view-body" id="evidence-body"></div>
+  </section>
 
-      <div class="map-banner" id="map-banner" hidden></div>
-      <div class="map-status" id="map-status">Loading terrain…</div>
-      <div class="map-tip" id="map-tip" hidden></div>
-
-      <!-- Collapsed by default: the map is the hero and an always-open legend
-           covered roughly a quarter of it. The same encoding is legible in the
-           rank list (silence hours, "no data reached us" chips), so nothing is
-           hidden - this is one click away, not gone. -->
-      <details class="legend" id="legend">
-        <summary>Legend</summary>
-        <div class="legend-body">
-          <div class="legend-block">
-            <span class="legend-title">Silence duration</span>
-            <div class="ramp" id="ramp"></div>
-            <div class="ramp-ends"><span>0h</span><span>96h+</span></div>
-            <p class="legend-cap">how long since a report resolved here</p>
-          </div>
-          <div class="legend-block">
-            <span class="legend-title">Anomaly type</span>
-            <ul class="legend-rings" id="legend-rings"></ul>
-          </div>
-          <div class="legend-block legend-block-misc">
-            <span class="legend-title">Also on the map</span>
-            <ul class="legend-misc">
-              <li><span class="sw sw-hatch" aria-hidden="true"></span>hatched = no report has ever reached us (cold start)</li>
-              <li><span class="sw sw-size" aria-hidden="true"></span>marker size = population</li>
-              <li><span class="sw sw-line" aria-hidden="true"></span>river-corridor adjacency (the Gi* graph)</li>
-              <li><span class="sw sw-pause" aria-hidden="true">⏸</span>a human decision is pending here</li>
-            </ul>
-          </div>
-          <p class="legend-foot">Silence = no report reached us. Not a confirmation that a place is quiet.</p>
-        </div>
-      </details>
-
-      <div class="map-attrib" id="map-attrib">© Esri, Maxar, Earthstar Geographics · © OpenStreetMap contributors · Elevation: Mapzen/AWS Terrain Tiles</div>
-    </section>
-
-    <!-- ═════════════ D · EVIDENCE ═════════════ -->
-    <section class="region region-evidence tabbed" id="region-evidence" aria-labelledby="h-evidence" data-tab-panel="evidence">
-      <header class="region-head">
-        <h2 id="h-evidence">Evidence <span id="evidence-subject" class="ev-subject"></span></h2>
-        <div class="head-right">
-          <span id="evidence-basis"></span>
-          <button type="button" class="icon-btn" id="btn-evidence-close" title="Clear selection" aria-label="Clear selection" hidden>✕</button>
-        </div>
-      </header>
-      <div class="region-body" id="evidence-body"></div>
-    </section>
-  </div>
-
-  <div class="col-right">
-    <!-- ═════════════ E · CHECKPOINT QUEUE ═════════════ -->
-    <section class="region region-checkpoint tabbed" id="region-checkpoint" aria-labelledby="h-checkpoint" data-tab-panel="checkpoint">
-      <header class="region-head region-head-checkpoint" id="checkpoint-head">
-        <h2 id="h-checkpoint">Human Checkpoint <span class="count-pill count-pill-warn" id="cp-count">0</span></h2>
-      </header>
-      <div class="region-body" id="checkpoint-body"></div>
-    </section>
-
-    <!-- ═════════════ F · ACTIVITY ═════════════ -->
-    <section class="region region-activity tabbed" id="region-activity" aria-labelledby="h-activity" data-tab-panel="activity">
-      <header class="region-head">
-        <h2 id="h-activity">Activity</h2>
-        <div class="seg seg-sm" role="group" aria-label="Filter activity">
-          <button type="button" data-act="all" aria-pressed="true">All</button>
-          <button type="button" data-act="incidents" aria-pressed="false">Incidents</button>
-          <button type="button" data-act="decisions" aria-pressed="false">Decisions</button>
-          <button type="button" data-act="pipeline" aria-pressed="false">Pipeline</button>
-        </div>
-      </header>
-      <div class="region-body">
+  <!-- ═════════════ 4 · AGENT ACTIVITY ═════════════ -->
+  <section class="view view-activity" id="view-activity" role="tabpanel" aria-labelledby="tab-activity"
+           tabindex="-1" hidden>
+    <header class="view-head" id="region-activity">
+      <h2>Agent activity</h2>
+      <div class="seg seg-sm" role="group" aria-label="Filter activity">
+        <button type="button" data-act="all" aria-pressed="true">All</button>
+        <button type="button" data-act="incidents" aria-pressed="false">Incidents</button>
+        <button type="button" data-act="decisions" aria-pressed="false">Decisions</button>
+        <button type="button" data-act="pipeline" aria-pressed="false">Pipeline</button>
+      </div>
+      <span class="act-count" id="act-count"></span>
+    </header>
+    <div class="act-grid">
+      <div class="act-main">
         <ul class="feed" id="activity-list" aria-live="polite" aria-relevant="additions"></ul>
       </div>
-    </section>
-  </div>
+      <aside class="act-side">
+        <section aria-labelledby="h-stages">
+          <h3 id="h-stages">This pass</h3>
+          <div class="stages" id="stage-list"></div>
+          <p class="helper" id="rail-sub">Waiting for first state…</p>
+          <p class="vh" id="rail-announce" aria-live="polite"></p>
+        </section>
+        <section aria-labelledby="h-sources" id="region-sources">
+          <h3 id="h-sources">Sources</h3>
+          <div class="src-list" id="source-chips"></div>
+          <p class="helper" id="source-agg"></p>
+        </section>
+        <section aria-labelledby="h-counts">
+          <h3 id="h-counts">This pass in numbers</h3>
+          <dl class="kv" id="pass-kv"></dl>
+        </section>
+      </aside>
+    </div>
+  </section>
 </main>
 
-<!-- ═════════════ G · SOURCE HEALTH ═════════════ -->
-<footer class="sources-strip tabbed" id="region-sources" aria-labelledby="h-sources" data-tab-panel="sources">
-  <h2 id="h-sources" class="strip-label">Sources</h2>
-  <div class="source-chips" id="source-chips"></div>
-  <div class="source-agg" id="source-agg"></div>
+<!-- ═════════════ STATUS BAR ═════════════
+     Left: what the agent is doing. Right: what it is waiting on. -->
+<footer class="statusbar" id="statusbar">
+  <div class="sb-pipe">
+    <span class="sb-track" id="sb-track" aria-hidden="true"></span>
+    <span class="sb-text" id="sb-text">Waiting for first state…</span>
+  </div>
+  <span class="sb-sources" id="sb-sources"></span>
+  <div class="sb-decisions">
+    <span class="txt" id="cbar-text">No decisions pending.</span>
+    <button type="button" class="btn btn-primary btn-sm" id="cbar-action" hidden>Review the queue</button>
+  </div>
 </footer>
-
-<!-- ═════════════ H · CHECKPOINT BAR ═════════════ -->
-<div class="cbar" id="checkpoint-bar">
-  <p id="cbar-text">No decisions pending. Everything raised so far has been signed for.</p>
-  <button type="button" class="btn btn-warn" id="cbar-action" hidden>Review queue →</button>
-</div>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <div id="modal-root"></div>
 
 <script type="module" src="./app.js"></script>
-<noscript><p style="padding:24px;font:14px system-ui">Signal Zero needs JavaScript. The API is still readable at <a href="/api/state">/api/state</a>.</p></noscript>
+<noscript><p style="padding:24px;font:15px system-ui">Signal Zero needs JavaScript. The API is still readable at <a href="/api/state">/api/state</a>.</p></noscript>
 </body>
 </html>

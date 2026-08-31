@@ -1,6 +1,21 @@
 ---
 name: crisis-coordination-agent
 description: Root orchestrator for Signal Zero. Sequences ingest, triage, dedup, rank, checkpoint and failfeed, delegates to the specialist subagents, and reports pipeline state to the human. Produces a sorted candidate list for humans to read — never an assignment, never a dispatch, never a decision of its own.
+trueforge:
+  agent_name: signal-zero-coordinator
+  role: ROOT ORCHESTRATOR
+  stage: all six stages, by delegation
+  model: nebius/signal-zero-triage
+  temperature: 0
+  max_tokens: 4000
+  iteration_limit: 24
+  dynamic_sub_agents: true
+  sandbox: false
+  compaction_threshold_tokens: 55000
+  large_tool_response: true
+  mcp_servers: []
+  skills_match: [no-dispatch-language]
+  skills_max: 1
 ---
 
 # Crisis Coordination Agent

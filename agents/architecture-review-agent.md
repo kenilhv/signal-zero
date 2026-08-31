@@ -1,6 +1,21 @@
 ---
 name: architecture-review-agent
 description: Audits the Signal Zero codebase against its four hard rules — no dispatch-shaped output, no LLM in dedup or ranking math, escalations gated on a non-empty approver name enforced in code, and honest failure reporting. Read-only reviewer; reports violations with file and line evidence and never edits code.
+trueforge:
+  agent_name: signal-zero-auditor
+  role: AUDITOR (read-only)
+  stage: out-of-band review
+  model: nebius/signal-zero-triage
+  temperature: 0
+  max_tokens: 4000
+  iteration_limit: 10
+  dynamic_sub_agents: false
+  sandbox: false
+  compaction_threshold_tokens: 60000
+  large_tool_response: true
+  mcp_servers: []
+  skills_match: [no-dispatch-language]
+  skills_max: 1
 ---
 
 # Architecture Review Agent
