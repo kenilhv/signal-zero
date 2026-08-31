@@ -1,0 +1,1787 @@
+openapi: 3.1.0
+
+# =============================================================================
+# Signal Zero - HTTP API, AS IT EXISTS TODAY
+# =============================================================================
+#
+# This file is a DESCRIPTION, not a proposal. Every path, status code, field
+# name and error body below was read off src/server.js, src/pipeline/checkpoint.js,
+# src/pipeline/rank.js, src/pipeline/ingest.js, src/pipeline/dedup.js and
+# src/store.js on the feat/control-room-ux branch. Where the current API is
+# inconsistent, the inconsistency is written down in a `description` rather than
+# smoothed over, because a later phase changes this API and a diff against an
+# idealised before-picture would measure nothing.
+#
+# Known inconsistencies documented in place (search for "INCONSISTENCY"):
+#   1. There is no uniform success envelope. Every route except GET /api/state
+#      returns a top-level `ok: true`; GET /api/state - the single largest and
+#      most-used response - has no `ok` field at all.
+#   2. There is no uniform error envelope either. Most errors are
+#      {ok:false, error}. Checkpoint errors add a machine-readable `code`.
+#      POST /api/run's 409 adds `reportCount` and `durationMs` and no `code`.
+#   3. GET /api/state's `settlements` array does not contain settlements. It
+#      contains RANKED ROWS (store.ranked), whose identity field is
+#      `settlementId`, not `id`.
+#   4. The same entity is keyed two ways: the gazetteer record uses `id`, the
+#      ranked row uses `settlementId`. GET /api/settlement/{id} returns both,
+#      side by side, in one response.
+#   5. `stats` is projected differently in POST /api/run, GET /api/state and
+#      store.stats - each drops fields the others carry.
+#   6. Simulating a demo failure that CANNOT be simulated still answers 200 with
+#      ok:true, carrying an incident that reports the simulation failed.
+#
+# NULL IS LOAD-BEARING. Read the description on every nullable field before
+# writing a client. In particular `lastReportAt` (the API-side name for the
+# database column `last_observed_at`) is null when NO REPORT HAS EVER REACHED US.
+# Null is not "unknown", not "zero", not "not measured yet", and must never be
+# coalesced to a timestamp. A client that renders null as `now`, as the epoch, or
+# as "0h silent" turns absence of evidence into a confirmed observation, which is
+# the exact failure this product exists to prevent.
+
+info:
+  title: Signal Zero API
+  version: 1.0.0
+  summary: Ranks Nepali settlements by anomalously long SILENCE, not by report volume.
+  description: |
+    Signal Zero ingests reports about a disaster, resolves them to settlements,
+    deduplicates them without a model, and then ranks settlements by how
+    anomalously long they have gone with **no confirming report** — an
+    exponential time-between-events baseline per hazard-tier/population cohort,
+    with a Getis-Ord Gi* neighbourhood statistic for spatial context.
+
+    Four rules constrain the whole surface, and they are visible in the schemas:
+
+    1. **No dispatch.** No field anywhere in this API names a place anyone should
+       go or a team anyone should send. Approving a checkpoint item yields a
+       non-preferential, alphabetically ordered *shortlist of jurisdictions to
+       inform*, never an assignment. Attempting to store a dispatch-shaped key in
+       checkpoint evidence raises `DISPATCH_FIELD_FORBIDDEN`.
+    2. **Nothing is actionable without a named human.** `POST /api/checkpoint/{id}/approve`
+       and `.../reject` return **400 `APPROVER_REQUIRED`** when `approvedBy` is
+       missing, not a string, or blank/whitespace-only.
+    3. **Zero LLM in dedup scoring or ranking math.** Triage tier 3 is the only
+       model touchpoint; its execution counts appear under `stats.tier3`.
+    4. **Honest unknowns.** `coverageBasis: "cohort-cold-start"` and a null
+       `lastReportAt` both mean NO DATA REACHED US. Neither means "confirmed
+       silent".
+
+    All state is in-memory (`src/store.js`) and is rebuilt by each pipeline pass,
+    except the incident feed and human checkpoint decisions.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server (`npm start`; PORT overridable via env).
+
+# THERE IS NO AUTHENTICATION. Not "omitted from the docs" - none exists in
+# src/server.js. Every route below, including the two that record a human's
+# signed decision, is open to anyone who can reach the port. `security: []`
+# states that as a fact rather than leaving it to be inferred from silence.
+# `components.securitySchemes` is deliberately absent for the same reason.
+security: []
+
+tags:
+  - name: state
+    description: Read the current world — ranked silence, checkpoint queue, fail feed.
+  - name: pipeline
+    description: Trigger a pipeline pass.
+  - name: checkpoint
+    description: The human decision gate. Nothing becomes actionable here anonymously.
+  - name: demo
+    description: Live-demo failure injection. Produces real incidents, not fake ones.
+
+paths:
+  /api/health:
+    get:
+      tags: [state]
+      operationId: getHealth
+      summary: Liveness, plus when the pipeline last completed a pass.
+      description: |
+        Always answers 200 while the process is up. This is a liveness probe, not
+        a readiness probe: it reports `ok: true` even when every pipeline stage
+        failed to load and the ranked list is empty.
+      responses:
+        '200':
+          description: The process is serving.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, lastRunAt]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  lastRunAt:
+                    type: [string, 'null']
+                    format: date-time
+                    description: |
+                      ISO-8601 completion time of the most recent pipeline pass, or
+                      **null when no pass has ever completed in this process**.
+                      Null means "never ran", not "ran and produced nothing".
+                    examples: ['2026-08-30T04:12:07.918Z']
+              examples:
+                booted-no-pass-yet:
+                  summary: Server up, boot pipeline pass still in flight
+                  value: { ok: true, lastRunAt: null }
+                after-a-pass:
+                  summary: At least one pass has completed
+                  value: { ok: true, lastRunAt: '2026-08-30T04:12:07.918Z' }
+
+  /api/state:
+    get:
+      tags: [state]
+      operationId: getState
+      summary: The whole dashboard payload in one object.
+      description: |
+        The single read the frontend polls. Returns the ranked silence table, the
+        human checkpoint queue, the incident feed, connector health, agent-harness
+        provenance for the last pass, and summary stats.
+
+        **INCONSISTENCY (1):** this is the only route in the API with no top-level
+        `ok` field. Clients that branch on `body.ok` see `undefined` here.
+
+        **INCONSISTENCY (3):** the `settlements` key does **not** hold settlement
+        records. It holds `store.ranked` — ranked rows whose identity field is
+        `settlementId`. The gazetteer record (with `id`) is only reachable through
+        `GET /api/settlement/{id}`.
+
+        **INCONSISTENCY (5):** `stats` here is a re-projection of `store.stats`
+        that drops `rankedCount`, which `POST /api/run` computed and stored.
+
+        Before the first pipeline pass completes, `settlements` is `[]` and
+        `stats.lastRunAt` is null — an empty ranking is the honest state at t=0,
+        not an error.
+      responses:
+        '200':
+          description: Current in-memory state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateResponse'
+
+  /api/run:
+    post:
+      tags: [pipeline]
+      operationId: runPipeline
+      summary: Run one full pipeline pass (ingest → triage → dedup → rank → checkpoint).
+      description: |
+        Runs the pipeline synchronously and answers when it finishes. Takes **no
+        request body** — any JSON sent is parsed and ignored.
+
+        A stage that throws never kills the pass: the failure is written to the
+        incident feed as a `degraded-source` incident and the pass continues with
+        whatever data survived. So **200 with `ok: true` does not mean every stage
+        succeeded** — check `GET /api/state` → `incidents` for degradation.
+
+        Concurrency is a single process-wide boolean. A second call while a pass
+        is in flight is refused with 409.
+      responses:
+        '200':
+          description: The pass completed (possibly with degraded stages — see the incident feed).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, reportCount, clusterCount, durationMs]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  reportCount:
+                    type: integer
+                    minimum: 0
+                  clusterCount:
+                    type: integer
+                    minimum: 0
+                  durationMs:
+                    type: integer
+                    minimum: 0
+                example: { ok: true, reportCount: 61, clusterCount: 23, durationMs: 4182 }
+        '409':
+          description: |
+            A pass is already running. **INCONSISTENCY (2):** this error body is
+            not the `{ok, error, code}` shape the checkpoint routes use — it has
+            no `code`, and it carries `reportCount` and `durationMs` (always 0)
+            that no other error body has, because the handler forwards
+            `runPipeline()`'s own return value verbatim.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, error, reportCount, durationMs]
+                properties:
+                  ok:
+                    type: boolean
+                    const: false
+                  error:
+                    type: string
+                  reportCount:
+                    type: integer
+                  durationMs:
+                    type: integer
+                    description: Always 0 on this response; the running pass's duration is not reported.
+                example:
+                  ok: false
+                  error: A pipeline pass is already running.
+                  reportCount: 61
+                  durationMs: 0
+        '500':
+          description: The pipeline threw outside a stage's own catch. Also written to the incident feed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BareError'
+
+  /api/checkpoint/{id}/approve:
+    post:
+      tags: [checkpoint]
+      operationId: approveCheckpointItem
+      summary: Approve a held item. Requires a named human.
+      description: |
+        Moves a `pending` checkpoint item to `approved`, records the approver's
+        trimmed name and the decision time, appends a `heal` incident to the fail
+        feed, and returns a **shortlist of jurisdictions to inform**.
+
+        The shortlist is not a dispatch, not an assignment and not a ranking. It
+        is ordered alphabetically by district precisely so that the ordering
+        carries no preference signal (see `buildShortlist` in
+        src/pipeline/checkpoint.js). The population and settlement counts on each
+        entry are context for a human reader, never a sort key.
+
+        Rule 2 is enforced here in application code, not in the UI, and is
+        mirrored by a NOT NULL + non-blank CHECK on `approvals.approved_by` in the
+        database.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      requestBody:
+        required: true
+        description: |
+          Omitting the body entirely does not 400 at the parser — `express.json()`
+          yields `{}`, `approvedBy` is `undefined`, and the named-approver check
+          then returns 400 `APPROVER_REQUIRED`.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+            examples:
+              named-human:
+                value: { approvedBy: 'Sunita Gurung, Rasuwa DDMC' }
+              blank-approver-rejected:
+                summary: Whitespace-only — answered 400 APPROVER_REQUIRED
+                value: { approvedBy: '   ' }
+      responses:
+        '200':
+          $ref: '#/components/responses/DecisionAccepted'
+        '400':
+          $ref: '#/components/responses/ApproverRequired'
+        '404':
+          $ref: '#/components/responses/CheckpointNotFound'
+        '409':
+          $ref: '#/components/responses/CheckpointImmutable'
+        '500':
+          description: |
+            Any non-`CheckpointError` thrown while deciding. The handler maps
+            `err.statusCode` when present and falls back to 500 otherwise, so this
+            body carries `code: "ERROR"` when the thrown error had no `code`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckpointError'
+
+  /api/checkpoint/{id}/reject:
+    post:
+      tags: [checkpoint]
+      operationId: rejectCheckpointItem
+      summary: Reject a held item. Also requires a named human.
+      description: |
+        Identical contract to `/approve`, including the 400 on a blank approver: a
+        rejection is a decision on record, so it is signed too.
+
+        One asymmetry that is real and easy to miss: the response field carrying
+        the name is `item.approvedBy` **even on a rejection**. There is no
+        `rejectedBy`. The field name says "approved"; the `status` field is what
+        distinguishes the two outcomes.
+
+        On rejection `shortlist` is always `[]` — the server only builds a
+        shortlist when `item.status === 'approved'`.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+            examples:
+              named-human:
+                value: { approvedBy: 'Bikash Thapa, Nuwakot DDMC' }
+      responses:
+        '200':
+          $ref: '#/components/responses/DecisionAccepted'
+        '400':
+          $ref: '#/components/responses/ApproverRequired'
+        '404':
+          $ref: '#/components/responses/CheckpointNotFound'
+        '409':
+          $ref: '#/components/responses/CheckpointImmutable'
+        '500':
+          description: Unmapped error while deciding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckpointError'
+
+  /api/settlement/{id}:
+    get:
+      tags: [state]
+      operationId: getSettlementDetail
+      summary: One settlement — gazetteer record, ranked row, its reports, clusters, neighbours, and a full score breakdown.
+      description: |
+        The drill-down behind a row in the ranked table. Every number the UI shows
+        is traceable to an input here; `scoreBreakdown` exists so no figure on the
+        screen is a black box.
+
+        **INCONSISTENCY (4):** `settlement` (the gazetteer record) identifies
+        itself with `id`; `ranked` (the ranked row for the same place) identifies
+        itself with `settlementId`. Both are returned in the same object.
+
+        Either half may independently be null: `settlement` is null when the id
+        exists in the ranking but not in the gazetteer, and `ranked` is null when
+        the gazetteer knows the place but no pass has ranked it yet. Only when
+        **both** are null does the route answer 404.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Gazetteer settlement id.
+          schema:
+            type: string
+            examples: ['np-rasuwa-timure', 'np-rasuwa-syabrubesi', 'np-nuwakot-betrawati']
+      responses:
+        '200':
+          description: Settlement detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementDetailResponse'
+        '404':
+          description: No gazetteer record AND no ranked row for this id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BareError'
+              example: { ok: false, error: 'No settlement "np-rasuwa-nowhere".' }
+
+  /api/demo/fail/{kind}:
+    post:
+      tags: [demo]
+      operationId: simulateFailure
+      summary: Inject a real failure of a given kind into the live system.
+      description: |
+        Drives the failure feed during the live demo. These are not fake rows: a
+        degraded source really flips a connector's status (and self-heals after
+        20 seconds with a `heal` incident), an ambiguous match really scores real
+        report pairs and really creates a pending checkpoint item, and a cold
+        start really rewrites a ranked row's `coverageBasis`.
+
+        Takes **no request body**.
+
+        **INCONSISTENCY (6):** when a simulation *cannot* be performed — no
+        connectors registered, no scoreable report pair loaded yet, nothing ranked
+        yet — the route still answers **200 with `ok: true`**, carrying an
+        incident whose message says the simulation failed. There is no status code
+        or flag distinguishing "simulated the failure you asked for" from "failed
+        to simulate it". The `ambiguous` kind additionally emits that not-possible
+        incident with `kind: "degraded-source"`, not `llm-fallback`, so the
+        incident kind alone does not tell a client which branch ran.
+
+        A further naming artefact worth noting before it is changed: a successful
+        `ambiguous` simulation emits an incident of kind **`llm-fallback`**, even
+        though dedup is deterministic Fellegi-Sunter and no model participates in
+        holding the pair. The kind is a legacy label, not a claim about an LLM.
+      parameters:
+        - name: kind
+          in: path
+          required: true
+          description: |
+            Lower-cased before matching. `coldstart` and `cold-start` are both
+            accepted and equivalent; the 400 message only advertises `coldstart`.
+          schema:
+            type: string
+            enum: [source, ambiguous, coldstart, cold-start]
+          examples:
+            source: { value: source }
+            ambiguous: { value: ambiguous }
+            coldstart: { value: coldstart }
+      responses:
+        '200':
+          description: |
+            An incident was appended to the fail feed. `checkpointItem` is present
+            only on a successful `ambiguous` simulation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, incident]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  incident:
+                    $ref: '#/components/schemas/Incident'
+                  checkpointItem:
+                    $ref: '#/components/schemas/CheckpointItem'
+              examples:
+                degraded-source:
+                  summary: kind=source — a connector goes dark and will self-heal in 20s
+                  value:
+                    ok: true
+                    incident:
+                      id: inc-mfa2k1x-7
+                      at: '2026-08-30T04:15:33.204Z'
+                      kind: degraded-source
+                      message: Connector "Kathmandu Post" stopped returning results - coverage is now partial
+                      detail:
+                        simulated: true
+                        source: Kathmandu Post
+                        sourceType: news
+                        previousStatus: live
+                cold-start:
+                  summary: kind=coldstart — a ranked row is re-based on its cohort
+                  value:
+                    ok: true
+                    incident:
+                      id: inc-mfa2k9d-8
+                      at: '2026-08-30T04:16:02.771Z'
+                      kind: cold-start
+                      message: Timure has no report history - scored from its hazard-tier cohort baseline, not its own data
+                      detail:
+                        simulated: true
+                        settlementId: np-rasuwa-timure
+                        expectedGapHours: 9.7
+                        coverageBasis: cohort-cold-start
+                ambiguous:
+                  summary: kind=ambiguous — a real near-threshold pair is held for a human
+                  value:
+                    ok: true
+                    incident:
+                      id: inc-mfa2kf2-9
+                      at: '2026-08-30T04:16:41.118Z'
+                      kind: llm-fallback
+                      message: 'Match held for a human: Ambiguous match: Bridge washed out above Timure vs Rasuwagadhi crossing reported impassable (match p=0.52)'
+                      detail:
+                        simulated: true
+                        forced: false
+                        checkpointId: amb-mfa2kf2-3
+                        matchProbability: 0.5241
+                        originalMatchProbability: null
+                        checkpointItem: amb-mfa2kf2-3
+                    checkpointItem:
+                      id: amb-mfa2kf2-3
+                      kind: ambiguous-match
+                      settlementId: np-rasuwa-timure
+                      title: 'Ambiguous match: Bridge washed out above Timure vs Rasuwagadhi crossing reported impassable (match p=0.52)'
+                      evidence:
+                        aId: rpt-9f21c4
+                        bId: rpt-3a77e0
+                        matchProbability: 0.5241
+                        forced: false
+                        simulated: true
+                        why: matchProbability 0.5241 sits in the undecidable band [0.45, 0.60)
+                      provenance:
+                        source: template
+                        reason: not-attempted
+                        agent: null
+                        turnId: null
+                        guardrails: []
+                      status: pending
+                      approvedBy: null
+                      decidedAt: null
+                      createdAt: '2026-08-30T04:16:41.117Z'
+                not-simulatable-still-200:
+                  summary: The documented inconsistency — a failed simulation answers ok:true
+                  value:
+                    ok: true
+                    incident:
+                      id: inc-mfa2kk0-a
+                      at: '2026-08-30T04:17:10.442Z'
+                      kind: degraded-source
+                      message: 'Could not simulate an ambiguous match: no scoreable report pair is loaded yet.'
+                      detail:
+                        simulated: true
+                        reason: no-candidate-pair
+        '400':
+          description: Unrecognised failure kind.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BareError'
+              example:
+                ok: false
+                error: Unknown failure kind "meltdown". Use source | ambiguous | coldstart.
+        '500':
+          description: The simulator itself threw.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BareError'
+
+components:
+
+  parameters:
+    CheckpointId:
+      name: id
+      in: path
+      required: true
+      description: |
+        Checkpoint item id. Minted as `esc-<base36 ms>-<base36 seq>` for
+        escalations and `amb-<base36 ms>-<base36 seq>` for ambiguous matches.
+        Ids are per-process and are not stable across restarts.
+      schema:
+        type: string
+        examples: ['esc-mfa2j8k-0', 'amb-mfa2kf2-3']
+
+  responses:
+
+    DecisionAccepted:
+      description: |
+        The decision was recorded. On approval `shortlist` holds the jurisdictions
+        to inform; on rejection it is always `[]`.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, item, shortlist]
+            properties:
+              ok:
+                type: boolean
+                const: true
+              item:
+                $ref: '#/components/schemas/CheckpointItem'
+              shortlist:
+                type: array
+                description: |
+                  NOT a dispatch, NOT an assignment, NOT a ranking. Alphabetical by
+                  district, deliberately, so the ordering carries no preference.
+                  Empty array on a rejection.
+                items:
+                  $ref: '#/components/schemas/JurisdictionShortlistEntry'
+          examples:
+            approved:
+              value:
+                ok: true
+                item:
+                  id: esc-mfa2j8k-0
+                  kind: escalation
+                  settlementId: np-rasuwa-timure
+                  title: 'Anomalous silence: Timure (Rasuwa) - 31.4h with no confirming report, expected roughly every 9.7h'
+                  evidence:
+                    settlementId: np-rasuwa-timure
+                    name: Timure
+                    district: Rasuwa
+                    population: 1240
+                    hazardTier: 3
+                    # Null here is the whole point: no report has ever reached us
+                    # about Timure. See RankedSettlement.lastReportAt.
+                    lastReportAt: null
+                    silenceHours: 31.4
+                    expectedGapHours: 9.7
+                    surprisal: 3.24
+                    giZScore: 2.41
+                    ownZScore: 1.88
+                    anomalyType: silent-cluster
+                    fitBasis: cohort
+                    coverageBasis: cohort-cold-start
+                    corroborationCount: 0
+                    rank: 1
+                  provenance:
+                    source: template
+                    reason: not-attempted
+                    agent: null
+                    turnId: null
+                    guardrails: []
+                  status: approved
+                  approvedBy: Sunita Gurung, Rasuwa DDMC
+                  decidedAt: '2026-08-30T04:20:11.006Z'
+                  createdAt: '2026-08-30T04:12:07.902Z'
+                shortlist:
+                  - jurisdictionId: np-district-rasuwa
+                    name: Rasuwa District Disaster Management Committee
+                    district: Rasuwa
+                    settlementsInDistrict: 8
+                    settlementsInScope: [np-rasuwa-timure]
+                    populationInDistrict: 21430
+                    ordering: alphabetical-by-district (non-preferential)
+
+    ApproverRequired:
+      description: |
+        **Rule 2, enforced.** `approvedBy` was absent, not a string, empty, or
+        whitespace-only (`"   "` fails). The item is untouched: nothing in Signal
+        Zero becomes actionable anonymously.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CheckpointError'
+          examples:
+            blank-approver:
+              value:
+                ok: false
+                error: A named human approver is required. Nothing in Signal Zero becomes actionable anonymously.
+                code: APPROVER_REQUIRED
+
+    CheckpointNotFound:
+      description: |
+        No checkpoint item with that id. Note the ordering: the approver check runs
+        **before** the lookup, so a blank approver against a nonexistent id answers
+        400, not 404.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CheckpointError'
+          example:
+            ok: false
+            error: No checkpoint item with id "esc-nope-0".
+            code: NOT_FOUND
+
+    CheckpointImmutable:
+      description: |
+        **The status is immutable once decided.** A checkpoint item's `status` is an
+        enumerable getter with a throwing setter; only `approve()`/`reject()` may
+        move it, and only from `pending`.
+
+        Two distinct 409s share this shape:
+
+        * `ALREADY_DECIDED` — the item is already `approved` or `rejected`. The
+          message names the prior approver, so a second decision cannot silently
+          overwrite the first human's signature.
+        * `STATUS_IMMUTABLE` — something attempted `item.status = ...` directly
+          rather than going through `approve()`/`reject()`. Not reachable from
+          these two routes today; it surfaces here if internal code bypasses the
+          decision functions.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CheckpointError'
+          examples:
+            already-decided:
+              value:
+                ok: false
+                error: Checkpoint item "esc-mfa2j8k-0" was already approved by Sunita Gurung, Rasuwa DDMC.
+                code: ALREADY_DECIDED
+            status-immutable:
+              value:
+                ok: false
+                error: CheckpointItem.status is read-only. Use approve(id, approvedBy) or reject(id, approvedBy).
+                code: STATUS_IMMUTABLE
+
+  schemas:
+
+    # -----------------------------------------------------------------------
+    # Errors
+    # -----------------------------------------------------------------------
+
+    BareError:
+      type: object
+      title: BareError
+      description: |
+        The error body used by every route except the checkpoint decisions and the
+        `POST /api/run` 409. **INCONSISTENCY (2):** it has no `code`, so a client
+        that wants to branch on the failure has only the human-readable `error`
+        string to match on.
+
+        Also returned by the catch-all: any unmatched `/api/*` path answers 404
+        with `{"ok":false,"error":"No route GET /api/whatever"}`. Unmatched
+        non-API paths fall through to the static frontend instead and are not JSON.
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          type: string
+      examples:
+        - { ok: false, error: 'No route GET /api/settlements' }
+
+    CheckpointError:
+      type: object
+      title: CheckpointError
+      description: |
+        The richer error body used only by the checkpoint decision routes. Adds a
+        stable machine-readable `code`. When the thrown error is not a
+        `CheckpointError`, the handler still emits this shape with `code: "ERROR"`.
+      required: [ok, error, code]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          type: string
+        code:
+          type: string
+          description: |
+            `APPROVER_REQUIRED` (400) · `DISPATCH_FIELD_FORBIDDEN` (400, raised at
+            item-creation time inside the pipeline, not by these routes) ·
+            `NOT_FOUND` (404) · `ALREADY_DECIDED` (409) · `STATUS_IMMUTABLE` (409) ·
+            `ERROR` (500 fallback for an error carrying no code).
+          examples: [APPROVER_REQUIRED, NOT_FOUND, ALREADY_DECIDED, STATUS_IMMUTABLE, ERROR]
+
+    # -----------------------------------------------------------------------
+    # Requests
+    # -----------------------------------------------------------------------
+
+    DecisionRequest:
+      type: object
+      title: DecisionRequest
+      description: |
+        The body of an approve or reject. `approvedBy` is the ONLY field read; any
+        other property is accepted by the parser and ignored.
+      required: [approvedBy]
+      properties:
+        approvedBy:
+          type: string
+          minLength: 1
+          description: |
+            The **named human** taking responsibility for this decision. Trimmed
+            before storage. A non-string, an empty string, or a whitespace-only
+            string is rejected with 400 `APPROVER_REQUIRED` — this is rule 2, and
+            it is enforced in application code *and* by a NOT NULL + non-blank
+            CHECK constraint on `approvals.approved_by`.
+          examples: ['Sunita Gurung, Rasuwa DDMC', 'Bikash Thapa, Nuwakot DDMC']
+
+    # -----------------------------------------------------------------------
+    # GET /api/state
+    # -----------------------------------------------------------------------
+
+    StateResponse:
+      type: object
+      title: StateResponse
+      description: |
+        **INCONSISTENCY (1):** no `ok` field, unlike every other response in this
+        API.
+      required: [settlements, checkpoint, incidents, sources, harness, stats]
+      properties:
+        settlements:
+          type: array
+          description: |
+            **INCONSISTENCY (3):** despite the key name, these are RANKED ROWS
+            (`store.ranked`), not gazetteer settlements. Their identity field is
+            `settlementId`. Ordered by `surprisal` descending, then Gi* descending,
+            then population descending, then id ascending — fully deterministic, so
+            the same inputs always produce the same order for the audit trail.
+            Empty until the first pipeline pass ranks anything.
+          items:
+            $ref: '#/components/schemas/RankedSettlement'
+        checkpoint:
+          type: array
+          description: |
+            The full checkpoint queue — pending and already-decided items alike, in
+            creation order. There is no filter parameter; clients filter on
+            `status` themselves.
+          items:
+            $ref: '#/components/schemas/CheckpointItem'
+        incidents:
+          type: array
+          description: |
+            The fail feed, newest first. **Truncated at 200 entries** by
+            `addIncident` in src/store.js: the 201st-oldest incident is silently
+            discarded, on the one surface whose entire job is making failure
+            visible. Documented here because it is the current behaviour, not
+            because it is correct.
+          items:
+            $ref: '#/components/schemas/Incident'
+        sources:
+          type: array
+          description: |
+            Connector health, sorted alphabetically by name. Serialised from an
+            object map, so ordering is by key, not by importance.
+          items:
+            $ref: '#/components/schemas/Source'
+        harness:
+          oneOf:
+            - $ref: '#/components/schemas/HarnessSummary'
+            - type: 'null'
+          description: |
+            Agent-harness (TrueForge) provenance for the last pass, or **null before
+            any pass has run**. Null means "no run yet"; it does **not** mean zero
+            executions. Every field inside is a counted fact read off TrueForge's
+            own responses — nothing is estimated.
+        stats:
+          $ref: '#/components/schemas/StateStats'
+
+    StateStats:
+      type: object
+      title: StateStats
+      description: |
+        **INCONSISTENCY (5):** this is a hand-built subset of `store.stats`. It
+        drops `rankedCount`, which the pipeline computed and stored, and each field
+        falls back to a live recount when `store.stats` is empty. `POST /api/run`
+        returns a third, different subset again.
+      required: [reportCount, clusterCount, lastRunAt, durationMs, pendingCheckpointCount, tier3]
+      properties:
+        reportCount:
+          type: integer
+          minimum: 0
+          examples: [61]
+        clusterCount:
+          type: integer
+          minimum: 0
+          examples: [23]
+        lastRunAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            When the last pass completed, or **null when no pass has ever
+            completed**. Null is "never ran" — not "unknown" and not "just now".
+          examples: ['2026-08-30T04:12:07.918Z']
+        durationMs:
+          type: integer
+          minimum: 0
+          description: |
+            Duration of the last pass. Defaults to `0` when no pass has run — note
+            this is the one place a "no data" state is represented by a number
+            rather than by null, and `0` here is therefore ambiguous between "never
+            ran" and "ran instantly". Distinguish it using `lastRunAt === null`.
+          examples: [4182]
+        pendingCheckpointCount:
+          type: integer
+          minimum: 0
+          description: Counted live off the queue on every request, not cached.
+          examples: [3]
+        tier3:
+          oneOf:
+            - $ref: '#/components/schemas/HarnessSummary'
+            - type: 'null'
+          description: |
+            The same `HarnessSummary` object as the top-level `harness` key, or
+            null. Duplicated in the payload, not referenced. Null before the first
+            pass — again "no run yet", never "zero classifications".
+
+    # -----------------------------------------------------------------------
+    # Ranked settlement — the core object
+    # -----------------------------------------------------------------------
+
+    RankedSettlement:
+      type: object
+      title: RankedSettlement
+      description: |
+        One row of the silence ranking, produced by src/pipeline/rank.js. Every
+        number here is deterministic; no model touches any of them (rule 3).
+
+        The fields after `corroborationCount` are traceability extras beyond the
+        minimum contract — they exist so a claim on screen can be checked against
+        the inputs that produced it.
+      required:
+        - settlementId
+        - name
+        - district
+        - lastReportAt
+        - silenceHours
+        - expectedGapHours
+        - surprisal
+        - giZScore
+        - isLocalAnomaly
+        - coverageBasis
+        - rank
+        - corroborationCount
+      properties:
+        settlementId:
+          type: string
+          description: '**INCONSISTENCY (4):** the gazetteer calls this same value `id`.'
+          examples: ['np-rasuwa-timure']
+        name:
+          type: string
+          examples: [Timure, Syabrubesi, Haku, Dhunche]
+        district:
+          type: string
+          examples: [Rasuwa, Nuwakot, Dhading]
+        lat:
+          type: number
+          examples: [28.216]
+        lon:
+          type: number
+          examples: [85.383]
+        population:
+          type: integer
+          examples: [1240]
+        hazardTier:
+          type: integer
+          minimum: 1
+          maximum: 3
+          examples: [3]
+        lastReportAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            **NULL IS LOAD-BEARING.** The API-side name for the database column
+            `last_observed_at`.
+
+            A timestamp means: a report resolved to this settlement at that
+            instant. **Null means NO REPORT HAS EVER REACHED US about this
+            settlement** — nothing has ever resolved here since the observation
+            window opened.
+
+            Null is **not** "unknown", **not** "zero", and **not** "not measured
+            yet". A client (or any read-path query) that coalesces this to `now()`,
+            to the epoch, or to "0h since last report" converts the absence of data
+            into a confirmed observation, and the product then lies in exactly the
+            direction it exists to prevent. Do not `COALESCE` it. Render it as
+            "no report has ever reached us", and cross-check
+            `coverageBasis === "cohort-cold-start"`, which carries the same fact.
+
+            When this is null, `silenceHours` is measured from the start of the
+            observation window rather than from any observation, and
+            `expectedGapHours` / `surprisal` are borrowed from the cohort baseline.
+            None of those three numbers is evidence about this settlement.
+          examples: ['2026-08-26T21:40:00.000Z', null]
+        silenceHours:
+          type: number
+          minimum: 0
+          description: |
+            Hours since `lastReportAt`. **When `lastReportAt` is null this is
+            measured from the opening of the observation window, not from an
+            observation** — it is an upper bound on how long we have been blind
+            here, not a measured silence. Always read it together with
+            `coverageBasis`.
+          examples: [31.4]
+        expectedGapHours:
+          type: number
+          exclusiveMinimum: 0
+          description: |
+            `1 / lambda` for this settlement's cohort. Clamped to between one report
+            per 2h and one per 72h.
+          examples: [9.7]
+        surprisal:
+          type: number
+          minimum: 0
+          description: |
+            `-ln P(gap >= silenceHours) = lambda * silenceHours`, in nats. The
+            PRIMARY sort key: it is this settlement's own evidence, so a place heard
+            from minutes ago scores ~0 no matter how dark its neighbourhood is.
+          examples: [3.24]
+        giZScore:
+          type: number
+          description: |
+            Getis-Ord Gi* over the precomputed river-corridor adjacency graph
+            (src/data/corridor.json). Spatial CONTEXT only — never an escalation
+            gate, because a wide outage flattens Gi* exactly when it matters most.
+            `0` before the statistic is computed.
+          examples: [2.41]
+        isLocalAnomaly:
+          type: boolean
+          description: '`giZScore > 1.96`. A NEIGHBOURHOOD statement, not a statement about this settlement.'
+        coverageBasis:
+          type: string
+          enum: [reports, cohort-cold-start]
+          description: |
+            **Rule 4, on the wire.**
+
+            * `reports` — this settlement has spoken for itself at least once.
+            * `cohort-cold-start` — **NO DATA REACHED US.** Every number on this row
+              is borrowed from its hazard-tier/population cohort. This does NOT mean
+              "confirmed silent"; it means we have never heard from here and cannot
+              tell silence from blindness. Always co-occurs with a null
+              `lastReportAt` from a genuine pipeline pass (the `coldstart` demo
+              simulator sets this field on an existing row without clearing
+              `lastReportAt`, so the two can disagree after a simulation).
+          examples: [reports, cohort-cold-start]
+        rank:
+          type: integer
+          minimum: 0
+          description: 1-based position in the ordering; `0` before ordering is applied.
+          examples: [1]
+        corroborationCount:
+          type: integer
+          minimum: 0
+          description: Distinct dedup clusters resolving here — independent confirmations, not raw report count.
+          examples: [2]
+        cohortKey:
+          type: string
+          description: '`t<hazardTier>|<population bucket>`.'
+          examples: ['t3|small']
+        lambdaPerHour:
+          type: number
+          examples: [0.103093]
+        fitBasis:
+          type: string
+          enum: [prior, cohort, global]
+          description: |
+            Where the rate estimate came from. An honesty label, not a switch:
+            `prior` = structural prior only, `cohort` = enough observed gaps in this
+            cohort, `global` = pooled across cohorts.
+        cohortSampleGaps:
+          type: integer
+          minimum: 0
+          description: 'Number of observed gaps behind the fit. `0` with `fitBasis` of `prior` means nothing was observed.'
+        reportCount:
+          type: integer
+          minimum: 0
+        ownZScore:
+          type: number
+          description: This settlement's own standardised surprisal. Required `> 0` for escalation.
+        neighborZScore:
+          type: number
+        neighborMeanSurprisal:
+          type: number
+        neighborCount:
+          type: integer
+          minimum: 0
+        isRegionalOutage:
+          type: boolean
+          description: This settlement AND its neighbours are all dark.
+        isSoloAnomaly:
+          type: boolean
+          description: This one place is extreme while its neighbours keep reporting normally.
+        anomalyType:
+          type: string
+          enum: [none, solo-anomaly, regional-outage, silent-cluster, cluster-edge]
+          description: |
+            `cluster-edge` is the honesty case: the neighbours went quiet, this
+            settlement did not. Context, not an alarm about this row.
+        isEscalationCandidate:
+          type: boolean
+          description: |
+            Whether this row passes the escalation gate — `silenceHours >= 6` AND
+            `surprisal >= 3.0` nats AND `ownZScore > 0`. This, not `isLocalAnomaly`,
+            is what may be put in front of a human.
+
+    # -----------------------------------------------------------------------
+    # Checkpoint
+    # -----------------------------------------------------------------------
+
+    CheckpointItem:
+      type: object
+      title: CheckpointItem
+      description: |
+        Something the machine refuses to decide on its own. Nothing here is
+        actionable until a named human decides (rule 2).
+      required: [id, kind, settlementId, title, evidence, provenance, status, approvedBy, decidedAt, createdAt]
+      properties:
+        id:
+          type: string
+          examples: ['esc-mfa2j8k-0', 'amb-mfa2kf2-3']
+        kind:
+          type: string
+          enum: [escalation, ambiguous-match]
+          description: |
+            `escalation` — a settlement whose silence looks anomalous enough that a
+            human should look. Idempotent per settlement, so re-running the pipeline
+            never buries an earlier human decision.
+            `ambiguous-match` — a Fellegi-Sunter pair that landed between the reject
+            and admit thresholds (0.45 / 0.60). The machine does not break the tie.
+        settlementId:
+          type: [string, 'null']
+          description: |
+            Null when the item does not resolve to one settlement — an unresolved
+            report or an ambiguous pair straddling two places. Null is "no single
+            settlement", not "settlement unknown but singular".
+          examples: ['np-rasuwa-timure', null]
+        title:
+          type: string
+          description: Falls back to `(untitled checkpoint item)` when blank.
+          examples: ['Anomalous silence: Timure (Rasuwa) - 31.4h with no confirming report, expected roughly every 9.7h']
+        evidence:
+          type: object
+          additionalProperties: true
+          description: |
+            Free-form supporting facts, shaped by `kind`. For an escalation this is
+            a snapshot of the ranked row (including its possibly-null
+            `lastReportAt`); for an ambiguous match it is the scored pair.
+
+            **Rule 1, enforced:** dispatch-shaped keys are rejected outright at
+            creation time with 400 `DISPATCH_FIELD_FORBIDDEN`, recursively to depth
+            6, case-insensitively — `dispatch`, `dispatchTo`, `dispatchedTo`,
+            `assignTo`, `assignedTo`, `assignment`, `sendTeam`, `deployTo`,
+            `deployment`, `responderAssignment`, `orders`, `tasking`. Signal Zero
+            ranks silence; it never assigns responders.
+        provenance:
+          $ref: '#/components/schemas/CheckpointProvenance'
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+          description: |
+            Read-only on the wire and read-only in the object: `status` is an
+            enumerable getter with a throwing setter, so only `approve()` /
+            `reject()` can move it, and only out of `pending`. Any later attempt is
+            409 (`ALREADY_DECIDED` / `STATUS_IMMUTABLE`).
+        approvedBy:
+          type: [string, 'null']
+          description: |
+            The named human who decided. **Null means UNDECIDED** — no human has
+            touched this item yet. Null is never "decided by an unknown person":
+            that state cannot exist, because a decision without a name is refused
+            with 400.
+
+            Note the field carries the deciding human's name on a **rejection**
+            too; there is no `rejectedBy`. Use `status` to tell the two apart.
+          examples: ['Sunita Gurung, Rasuwa DDMC', null]
+        decidedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 'Null while `status` is `pending`. Null means "no decision has been made", not "decision time unrecorded".'
+          examples: ['2026-08-30T04:20:11.006Z', null]
+        createdAt:
+          type: string
+          format: date-time
+          examples: ['2026-08-30T04:12:07.902Z']
+
+    CheckpointProvenance:
+      type: object
+      title: CheckpointProvenance
+      description: |
+        **Who wrote the words a human is about to sign.** Always present, so the UI
+        never has to infer it.
+      required: [source, reason, agent, turnId, guardrails]
+      properties:
+        source:
+          type: string
+          enum: [harness-drafted, template]
+          description: |
+            `harness-drafted` — a registered TrueForge agent wrote the prose and
+            every guardrail accepted it. `template` — deterministic string
+            templating in checkpoint.js; no model was involved.
+        reason:
+          type: [string, 'null']
+          description: |
+            Why this is a template rather than a draft. **Null on a
+            `harness-drafted` item** (the field is not meaningful there), and never
+            null on a `template` item — it defaults to `not-attempted` rather than
+            null, precisely so that "the agent did not write this" and "the agent
+            tried and a guardrail blocked it" stay distinguishable to the reviewer
+            signing their name.
+          examples: [not-attempted, null]
+        agent:
+          type: [string, 'null']
+          description: The TrueForge agent name. Null on a `template` item — present-but-null, never absent, so clients never branch on key presence.
+        turnId:
+          type: [string, 'null']
+          description: The TrueForge turn id, so the exact execution is recoverable. Null on a `template` item.
+        guardrails:
+          type: array
+          items:
+            type: string
+          description: |
+            Which guardrails ran and passed. **An empty array means "none
+            recorded", which is NOT the same as "none ran".**
+
+    JurisdictionShortlistEntry:
+      type: object
+      title: JurisdictionShortlistEntry
+      description: |
+        A standing authority to **inform**. Deliberately not an optimizer, an
+        assignment or a dispatch (rule 1): sorting by population at risk, distance
+        or capacity would be dispatch reasoning, so the ordering is alphabetical by
+        district and carries no preference signal at all. The counts below are
+        context for a human reader, never a ranking key.
+
+        When nothing in the item resolves to a settlement, the shortlist widens to
+        every district in the gazetteer — a wider list of who to inform is a safe
+        failure mode; a narrower guess is not.
+      required: [jurisdictionId, name, district, settlementsInDistrict, settlementsInScope, populationInDistrict, ordering]
+      properties:
+        jurisdictionId:
+          type: string
+          examples: ['np-district-rasuwa', 'np-district-nuwakot']
+        name:
+          type: string
+          examples: ['Rasuwa District Disaster Management Committee']
+        district:
+          type: string
+          examples: [Rasuwa]
+        settlementsInDistrict:
+          type: integer
+          minimum: 0
+          examples: [8]
+        settlementsInScope:
+          type: array
+          items:
+            type: string
+          examples: [['np-rasuwa-timure']]
+        populationInDistrict:
+          type: integer
+          minimum: 0
+          examples: [21430]
+        ordering:
+          type: string
+          const: alphabetical-by-district (non-preferential)
+          description: A literal disclaimer carried in the payload so no consumer reads the order as a priority.
+
+    # -----------------------------------------------------------------------
+    # Incidents, sources, reports, clusters
+    # -----------------------------------------------------------------------
+
+    Incident:
+      type: object
+      title: Incident
+      description: |
+        One entry in the fail feed. This feed is the product, not an afterthought:
+        every degraded stage, every cold start, every human decision and every
+        recovery lands here.
+      required: [id, at, kind, message, detail]
+      properties:
+        id:
+          type: string
+          examples: ['inc-mfa2k1x-7']
+        at:
+          type: string
+          format: date-time
+          examples: ['2026-08-30T04:15:33.204Z']
+        kind:
+          type: string
+          enum: [degraded-source, llm-fallback, cold-start, heal, agent-refusal]
+          description: |
+            * `degraded-source` — a connector, a pipeline stage or a request failed.
+              Also used for "could not simulate the failure you asked for".
+            * `llm-fallback` — a model path fell back, **and also** the kind emitted
+              when an ambiguous dedup pair is held for a human. That second use is a
+              legacy label: dedup is deterministic Fellegi-Sunter and no model
+              participates. Documented rather than corrected here.
+            * `cold-start` — no report has ever resolved to a settlement; its
+              baseline is borrowed from its cohort.
+            * `heal` — recovery, and also every approve/reject decision.
+            * `agent-refusal` — the tier-3 agent refused, citing a rule.
+        message:
+          type: string
+          examples: ['No report has ever resolved to Timure (Rasuwa). Baseline borrowed from cohort t3|small.']
+        detail:
+          type: object
+          additionalProperties: true
+          description: Kind-specific context. `{}` when there is none.
+
+    Source:
+      type: object
+      title: Source
+      description: Health of one ingest connector, as of its last fetch attempt.
+      required: [name, sourceType, status, lastFetchAt]
+      properties:
+        name:
+          type: string
+          examples: ['Kathmandu Post']
+        sourceType:
+          type: [string, 'null']
+          description: |
+            `news` · `social` · `official`. Null when the connector was registered
+            without one — null is "not recorded", not a fourth type. Not constrained
+            by an enum here because the server does not constrain it either.
+          examples: [news, social, official, null]
+        status:
+          type: string
+          description: |
+            Observed values: `live`, `degraded`, `down`, `ok` (only as the restore
+            target of a healed simulation), and `unknown` (the serialiser's default
+            when a registered source carries no status). Deliberately not an enum:
+            the server applies no validation, so a client must tolerate anything.
+          examples: [live, degraded, down, unknown]
+        lastFetchAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            **Null means this connector has never been fetched** in this process —
+            not "fetched at an unknown time" and not "fetched long ago".
+          examples: ['2026-08-30T04:11:52.310Z', null]
+
+    Report:
+      type: object
+      title: Report
+      description: |
+        One ingested item. Ingest deliberately does NOT resolve `settlementId`,
+        `triage` or `clusterId` — those are triage's and dedup's job — so a report
+        leaves ingest with all three null.
+      required: [id, sourceType, sourceName, url, title, text, publishedAt, fetchedAt, settlementId, triage, clusterId]
+      properties:
+        id:
+          type: string
+          description: Derived from the URL, so the same URL is the same report across passes.
+        sourceType:
+          type: string
+          enum: [news, social, official]
+        sourceName:
+          type: string
+          examples: ['Kathmandu Post']
+        url:
+          type: string
+          format: uri
+        title:
+          type: string
+          maxLength: 300
+          description: Truncated to 300 characters at ingest.
+          examples: ['Bridge washed out above Timure as Trishuli surges']
+        text:
+          type: string
+          description: Truncated at ingest.
+        publishedAt:
+          type: string
+          format: date-time
+          description: |
+            Falls back to `fetchedAt` when the source published no parseable date.
+            This fallback is intentional and narrow — it never silently becomes
+            "now" for a report the pipeline is about to treat as fresh evidence.
+        fetchedAt:
+          type: string
+          format: date-time
+        settlementId:
+          type: [string, 'null']
+          description: |
+            **Null means this report has not been resolved to a settlement** — either
+            triage has not run, or triage looked and refused to guess (for example a
+            dateline-only name match, which is recorded in `triage.signals` and
+            deliberately NOT resolved). Null is a refusal to guess, not a lookup
+            failure to be papered over.
+          examples: ['np-rasuwa-timure', null]
+        triage:
+          oneOf:
+            - $ref: '#/components/schemas/Triage'
+            - type: 'null'
+          description: '**Null means triage has not run on this report yet.** Not "triaged as irrelevant".'
+        clusterId:
+          type: [string, 'null']
+          description: '**Null means dedup has not clustered this report** — not "belongs to no cluster by decision".'
+          examples: ['cl-004', null]
+
+    Triage:
+      type: object
+      title: Triage
+      description: |
+        Triage's verdict on one report. Tiers 1 and 2 are deterministic; **tier 3 is
+        the only LLM touchpoint in the entire system** (rule 3), and even there the
+        model never touches dedup scoring or ranking math.
+      properties:
+        category:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          examples: [0.913]
+        tier:
+          type: integer
+          enum: [1, 2, 3]
+        matchedOn:
+          type: [string, 'null']
+          description: '**Null means nothing was matched on** — including the case where a match was found and deliberately refused.'
+        executor:
+          type: string
+          description: |
+            Present on tier-3 verdicts. `none` means the classification was
+            attempted and NOT resolved (budget exhausted, harness unreachable, or
+            the agent refused) — it does not mean "no model was needed".
+          examples: [harness, fallback, none]
+        signals:
+          type: object
+          additionalProperties: true
+          description: Auditable evidence for the verdict, including refusals and why they were refused.
+        refused:
+          type: object
+          additionalProperties: true
+          description: Present when the tier-3 agent refused, carrying the rule it cited.
+      additionalProperties: true
+
+    Cluster:
+      type: object
+      title: Cluster
+      description: |
+        A group of reports judged to describe the same event by deterministic
+        Fellegi-Sunter scoring. **No LLM participates** (rule 3). Pairs whose match
+        probability lands between the reject and admit thresholds are not merged —
+        they become `ambiguous-match` checkpoint items instead.
+      required: [id, settlementId, reportIds, confidence, sourceTypeDiversity]
+      properties:
+        id:
+          type: string
+          examples: ['cl-001', 'cl-004']
+        settlementId:
+          type: [string, 'null']
+          description: |
+            The settlement a majority of members resolve to. **Null means no member
+            resolved to a settlement**, so the cluster is real but unplaced — not
+            "placed somewhere unknown".
+          examples: ['np-rasuwa-timure', null]
+        reportIds:
+          type: array
+          items:
+            type: string
+          description: Sorted, so the cluster is byte-stable across passes.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Mean intra-cluster match probability.
+          examples: [0.8712]
+        sourceTypeDiversity:
+          type: integer
+          minimum: 0
+          maximum: 3
+          description: How many distinct source types corroborate. 1 means a single kind of source is carrying the whole cluster.
+          examples: [2]
+
+    # -----------------------------------------------------------------------
+    # GET /api/settlement/{id}
+    # -----------------------------------------------------------------------
+
+    SettlementDetailResponse:
+      type: object
+      title: SettlementDetailResponse
+      required: [ok, settlement, ranked, reports, clusters, neighbors, checkpoint, scoreBreakdown]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        settlement:
+          oneOf:
+            - $ref: '#/components/schemas/GazetteerSettlement'
+            - type: 'null'
+          description: |
+            The gazetteer record. **Null means this id is not in the gazetteer** —
+            it exists only as a ranked row. Null here plus null `ranked` is a 404.
+        ranked:
+          oneOf:
+            - $ref: '#/components/schemas/RankedSettlement'
+            - type: 'null'
+          description: |
+            The ranked row. **Null means no pipeline pass has ranked this
+            settlement yet** — not "ranked with no anomaly". When this is null,
+            `scoreBreakdown` is null too.
+        reports:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+          description: Reports whose `settlementId` equals this id. Empty means none resolved here — the same fact a null `lastReportAt` carries.
+        clusters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Cluster'
+        neighbors:
+          type: array
+          items:
+            type: string
+          description: |
+            Adjacent settlement ids from the precomputed river-corridor graph
+            (src/data/corridor.json). Precomputed on purpose — ADR-003 refused
+            PostGIS, so there is no spatial query behind this. `[]` when the id has
+            no corridor entry.
+          examples: [['np-rasuwa-syabrubesi']]
+        checkpoint:
+          type: array
+          items:
+            $ref: '#/components/schemas/CheckpointItem'
+          description: Checkpoint items whose `settlementId` equals this id, pending or decided.
+        scoreBreakdown:
+          oneOf:
+            - $ref: '#/components/schemas/ScoreBreakdown'
+            - type: 'null'
+          description: '**Null when `ranked` is null** — there is no score to break down until a pass has ranked this place.'
+
+    GazetteerSettlement:
+      type: object
+      title: GazetteerSettlement
+      description: 'The static record from src/data/gazetteer.json. **INCONSISTENCY (4):** identifies itself with `id`, while the ranked row for the same place uses `settlementId`.'
+      required: [id, name, district, lat, lon, population, hazardTier]
+      properties:
+        id:
+          type: string
+          examples: ['np-rasuwa-timure']
+        name:
+          type: string
+          examples: [Timure]
+        district:
+          type: string
+          examples: [Rasuwa]
+        lat:
+          type: number
+          examples: [28.216]
+        lon:
+          type: number
+          examples: [85.383]
+        population:
+          type: integer
+          examples: [1240]
+        hazardTier:
+          type: integer
+          minimum: 1
+          maximum: 3
+          examples: [3]
+        aliases:
+          type: array
+          items:
+            type: string
+          description: Spelling and transliteration variants used by triage's name matching.
+          examples: [['Timure Bazar', 'Rasuwagadhi', 'Timure Bazaar']]
+
+    ScoreBreakdown:
+      type: object
+      title: ScoreBreakdown
+      description: |
+        Every number the UI shows, traced back to its input. No black box. Also
+        carries the formula and the thresholds so the arithmetic can be redone by
+        hand.
+      required: [lastReportAt, silenceHours, expectedGapHours, surprisal, surprisalFormula, giZScore, giThreshold, method]
+      properties:
+        lastReportAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            **NULL IS LOAD-BEARING — same meaning as on `RankedSettlement`: NO
+            REPORT HAS EVER REACHED US.** Not "unknown", not "zero". Never coalesce
+            it to a timestamp; doing so turns "we are blind here" into "we
+            confirmed silence here", which is the failure this product exists to
+            prevent. Cross-check `coverageBasis` and `reportsUsed: 0`.
+          examples: ['2026-08-26T21:40:00.000Z', null]
+        silenceHours:
+          type: number
+          minimum: 0
+        expectedGapHours:
+          type: number
+        lambdaPerHour:
+          type: [number, 'null']
+          description: '**Null when `expectedGapHours` is not a finite positive number** — the rate is undefined, not zero.'
+          examples: [0.10309, null]
+        survivalProbability:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+          description: '`exp(-lambda * silenceHours)`. **Null when `lambdaPerHour` is null** — uncomputable, not 0.'
+          examples: [0.03921, null]
+        surprisal:
+          type: number
+          minimum: 0
+        surprisalFormula:
+          type: string
+          const: 'surprisal = -ln(P(gap >= observed)) = lambda * silenceHours'
+        giZScore:
+          type: number
+        giThreshold:
+          type: number
+          const: 1.96
+        isLocalAnomaly:
+          type: boolean
+        isEscalationCandidate:
+          type: boolean
+          description: Defaults to `false` when the ranked row predates the field. Gi* significance is about the neighbourhood; escalation needs this settlement itself to be silent and surprising.
+        escalationThresholds:
+          type: object
+          required: [minSurprisalNats, minSilenceHours, requiresOwnZAboveMean, note]
+          properties:
+            minSurprisalNats:
+              type: number
+              const: 3
+            minSilenceHours:
+              type: number
+              const: 6
+            requiresOwnZAboveMean:
+              type: boolean
+              const: true
+            note:
+              type: string
+              const: 'Gi* is context, not a gate: a wide outage flattens it exactly when it matters most.'
+        coverageBasis:
+          type: string
+          enum: [reports, cohort-cold-start]
+        corroborationCount:
+          type: integer
+          minimum: 0
+        reportsUsed:
+          type: integer
+          minimum: 0
+          description: 'Reports resolved to this settlement. `0` alongside a null `lastReportAt` is the consistent cold-start picture.'
+        fitBasis:
+          type: [string, 'null']
+          description: '`prior` · `cohort` · `global`. Null when the ranked row carries no fit basis.'
+        cohortKey:
+          type: [string, 'null']
+          examples: ['t3|small', null]
+        cohortSampleGaps:
+          type: integer
+          minimum: 0
+          description: Defaults to `0` when absent. `0` means the fit rests on the structural prior alone.
+        lambdaBoundsPerHour:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: number
+          description: 'The clamp: between one report per 72h and one per 2h.'
+        method:
+          type: string
+          description: Prose statement of the estimator, carried in the payload so the method travels with the number.
+
+    # -----------------------------------------------------------------------
+    # Agent harness provenance
+    # -----------------------------------------------------------------------
+
+    HarnessSummary:
+      type: object
+      title: HarnessSummary
+      description: |
+        TrueForge agent-harness provenance for the last pass. **Every field is a
+        counted fact** read off TrueForge's own responses — a session id it minted,
+        a turn id it minted, token counts off `turn.done.state.metrics`, an agent id
+        read back from its API. Nothing is estimated, and nothing appears here that
+        the UI could not truthfully populate.
+
+        The whole object is null before the first pass, because "no run yet" is not
+        "zero executions".
+      required: [executedByHarness, executedByFallback, unresolved, turns, tokens, approvalGate, guardrail]
+      properties:
+        executedByHarness:
+          type: integer
+          minimum: 0
+          description: Tier-3 classifications TrueForge actually executed as session turns this pass.
+        executedByFallback:
+          type: integer
+          minimum: 0
+          description: Tier-3 classifications the direct-fetch path had to cover.
+        unresolved:
+          type: integer
+          minimum: 0
+          description: '`executedByHarness + executedByFallback + unresolved` is every tier-3 classification attempted this pass.'
+        harnessReachable:
+          type: [boolean, 'null']
+          description: '**Null means never probed this pass** — not "unreachable". `false` is the measured "we tried and could not reach it".'
+        harnessBaseUrl:
+          type: [string, 'null']
+        harnessModel:
+          type: [string, 'null']
+        harnessSessionId:
+          type: [string, 'null']
+          description: The FIRST session of the pass, kept for a reader that predates the session pool. Null when no session was created.
+        harnessSessionIds:
+          type: array
+          items:
+            type: string
+          description: Every session the pass used. `[]` when none were created.
+        pool:
+          oneOf:
+            - type: object
+              required: [maxSize, created, reused, live]
+              properties:
+                maxSize:
+                  type: integer
+                  minimum: 1
+                created:
+                  type: integer
+                  minimum: 0
+                reused:
+                  type: integer
+                  minimum: 0
+                live:
+                  type: integer
+                  minimum: 0
+                  description: Read off the pool itself, because the pool outlives a pass.
+            - type: 'null'
+          description: |
+            What the session pool actually did. **Not a claim about parallelism** —
+            the per-turn latencies in `turns` are that. Null when the pool has never
+            reported.
+        harnessTokens:
+          type: integer
+          minimum: 0
+          description: Duplicate of `tokens.total`, kept for older readers.
+        agentName:
+          type: [string, 'null']
+        agentId:
+          type: [string, 'null']
+        agentRegistered:
+          type: [boolean, 'null']
+          description: '**Null means not checked**, distinct from `false` = checked and not registered.'
+        binding:
+          type: [string, 'null']
+          description: |
+            `named-agent` only when TrueForge answered the session create with
+            `agent.type === "reference"`. Anything else is `inline-spec`. Null before
+            any session was bound.
+          examples: [named-agent, inline-spec, null]
+        turns:
+          type: array
+          description: Per-turn evidence, so any claim can be checked against TrueForge itself.
+          items:
+            type: object
+            properties:
+              seq:
+                type: integer
+              sessionId:
+                type: string
+              turnId:
+                type: string
+              status:
+                type: string
+                examples: [done]
+              totalTokens:
+                type: integer
+              inputTokens:
+                type: integer
+              outputTokens:
+                type: integer
+              cacheReadTokens:
+                type: integer
+              latencyMs:
+                type: integer
+              approvalRequired:
+                type: boolean
+            additionalProperties: true
+        tokens:
+          type: object
+          required: [total, input, output, cacheRead]
+          properties:
+            total:
+              type: integer
+              minimum: 0
+            input:
+              type: integer
+              minimum: 0
+            output:
+              type: integer
+              minimum: 0
+            cacheRead:
+              type: integer
+              minimum: 0
+        approvalGate:
+          type: object
+          description: |
+            TrueForge's OWN tool-approval gate — **not** Signal Zero's named-approver
+            rule, which is enforced server-side and is not visible here. The tier-3
+            agent has no tools, so the honest value today is `armed: false, fired: 0`;
+            that is surfaced rather than implying a gate we do not have.
+          required: [armed, tools, fired, resolved]
+          properties:
+            armed:
+              type: boolean
+              description: Read off the bound agent's own manifest.
+            tools:
+              type: array
+              items:
+                type: string
+            fired:
+              type: integer
+              minimum: 0
+              description: Turns that actually parked on an approval decision.
+            resolved:
+              type: integer
+              minimum: 0
+        guardrail:
+          type: object
+          description: Guardrail enforcement shown as a number, not an assertion.
+          required: [inputBlocked, outputBlocked, advisory, rules]
+          properties:
+            inputBlocked:
+              type: integer
+              minimum: 0
+            outputBlocked:
+              type: integer
+              minimum: 0
+            advisory:
+              type: integer
+              minimum: 0
+            rules:
+              type: array
+              items:
+                type: string
+              description: Distinct rules that produced a verdict. `[]` means none recorded, which is not the same as none configured.
+        lastError:
+          type: [string, 'null']
+          description: '**Null means no error was recorded this pass** — not "no errors occurred and we checked".'
+        checkedAt:
+          type: [string, 'null']
+          format: date-time
+          description: '**Null means the harness has never been probed.**'

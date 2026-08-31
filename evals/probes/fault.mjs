@@ -13,7 +13,7 @@
 //      TRUEFORGE_TIMEOUT_MS / TRUEFORGE_POLL_MS as usual
 
 import fs from 'node:fs';
-import { startStub, findDeadPort } from '../lib/trueforge-stub.js';
+import { findDeadPort, startStub } from '../lib/trueforge-stub.js';
 
 const outPath = process.argv[2];
 const mode = process.env.FAULT_MODE || 'healthy';
@@ -37,7 +37,17 @@ process.env.OPENAI_API_KEY = ''; // no fallback: the harness is the only executo
 process.env.USE_LIVE_SCRAPE = 'false';
 
 const { triage } = await import(new URL('../../src/pipeline/triage.js', import.meta.url));
-const { store } = await import(new URL('../../src/store.js', import.meta.url));
+const { store, recentIncidents, initBackend } = await import(
+  new URL('../../src/store.js', import.meta.url)
+);
+// The store is forced into its NON-DURABLE mode here. This probe measures triage
+// behaviour, which both backends are required to agree on, and pointing it at the
+// shared Postgres would leave this probe's incidents in a table other eval
+// scenarios read. The incident FEED is read through recentIncidents(), which
+// flushes pending writes first — `store.incidents` is an outbox that drains as
+// writes land, so slicing it across an `await` would under-report.
+process.env.DATABASE_URL = '';
+await initBackend({ logger: null });
 const harness = await import(new URL('../../src/harness/trueforge.js', import.meta.url));
 const gazetteer = JSON.parse(
   fs.readFileSync(new URL('../../src/data/gazetteer.json', import.meta.url), 'utf8')
@@ -106,7 +116,11 @@ const out = {
     llmWhy: r.triage?.signals?.llmWhy ?? null,
     triage: r.triage
   })),
-  incidents: store.incidents.map((i) => ({ kind: i.kind, message: i.message, detail: i.detail }))
+  incidents: (await recentIncidents({ limit: 500 })).map((i) => ({
+    kind: i.kind,
+    message: i.message,
+    detail: i.detail
+  }))
 };
 
 fs.writeFileSync(outPath, JSON.stringify(out, null, 2));

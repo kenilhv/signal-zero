@@ -26,6 +26,24 @@ export async function startServer({ port, env = {}, bootTimeoutMs = 45000 } = {}
       BRIGHTDATA_API_TOKEN: '',
       OPENAI_API_KEY: '',
       TRUEFORGE_ENABLED: 'false',
+      // ---------------------------------------------------------------------
+      // AND DEFAULT EVERY SCENARIO TO A PRIVATE, NON-DURABLE STORE.
+      // ---------------------------------------------------------------------
+      // Same reasoning as the credentials above, one level down: a scenario must
+      // not pass or fail because of a database that happened to be lying around
+      // in .env. Without this every spawned server would share ONE Postgres, so
+      // scenario N would boot into scenario N-1's checkpoint queue, incident feed
+      // and ranked snapshot — and the failures would be order-dependent, which is
+      // the worst kind to debug.
+      //
+      // This is not a gap in coverage. What these families test — guardrails,
+      // no-dispatch, ranking properties, surviving a dead dependency — is
+      // behaviour both backends are required to agree on, and each scenario
+      // wants a clean store, which is exactly what this gives it. Durability
+      // itself is NOT provable this way and is therefore tested separately, by a
+      // scenario that provisions its own real database and passes it in here
+      // explicitly (family D, "silence survives a restart").
+      DATABASE_URL: '',
       ...env
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -87,13 +105,20 @@ export async function startServer({ port, env = {}, bootTimeoutMs = 45000 } = {}
   };
 }
 
-async function request(method, url, body, { timeoutMs = 90000, rawBody } = {}) {
+async function request(method, url, body, { timeoutMs = 90000, rawBody, headers = {} } = {}) {
   const started = Date.now();
   try {
     const res = await fetch(url, {
       method,
-      headers:
-        body !== undefined || rawBody !== undefined ? { 'content-type': 'application/json' } : {},
+      headers: {
+        ...(body !== undefined || rawBody !== undefined
+          ? { 'content-type': 'application/json' }
+          : {}),
+        // Extra request headers, so a case can send an `Idempotency-Key` and
+        // prove the double-submission behaviour over real HTTP rather than at
+        // the unit level, where a middleware can be bypassed.
+        ...headers
+      },
       body: rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(timeoutMs)
     });
@@ -104,13 +129,28 @@ async function request(method, url, body, { timeoutMs = 90000, rawBody } = {}) {
     } catch {
       /* not json */
     }
-    return { ok: res.ok, status: res.status, text, json, ms: Date.now() - started };
+    return {
+      ok: res.ok,
+      status: res.status,
+      text,
+      json,
+      // Headers are returned so a case can assert on the MEDIA TYPE, not just the
+      // body. RFC 9457 is a content-type contract as much as a shape one: a
+      // problem document served as application/json is not a problem document to
+      // a client that dispatches on the type, so `application/problem+json` has
+      // to be checkable here.
+      headers: Object.fromEntries(res.headers.entries()),
+      contentType: res.headers.get('content-type') || '',
+      ms: Date.now() - started
+    };
   } catch (err) {
     return {
       ok: false,
       status: 0,
       text: '',
       json: null,
+      headers: {},
+      contentType: '',
       error: String(err.message || err),
       ms: Date.now() - started
     };

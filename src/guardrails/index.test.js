@@ -5,21 +5,20 @@
 // fail-closed behaviour, and the fact that a block is LOUD (incident recorded,
 // report forced to unresolved) rather than a silent rewrite.
 
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-
+import { test } from 'node:test';
+import { recentIncidents } from '../store.js';
 import {
-  guardInput,
-  guardOutput,
-  guard,
+  ALL_RULES,
   blockAndRecord,
   describeVerdict,
-  worstSeverity,
+  GUARDRAIL_INCIDENT_KIND,
+  guard,
+  guardInput,
+  guardOutput,
   textOf,
-  ALL_RULES,
-  GUARDRAIL_INCIDENT_KIND
+  worstSeverity
 } from './index.js';
-import store from '../store.js';
 
 // ---------------------------------------------------------------------------
 // Stage routing and asymmetry
@@ -117,8 +116,11 @@ test('a guardrail that cannot evaluate its input FAILS CLOSED', () => {
 // Enforcement: loud, not silent
 // ---------------------------------------------------------------------------
 
-test('blockAndRecord files a visible incident and forces UNRESOLVED', () => {
-  const before = store.incidents.length;
+// Reads the FAIL FEED, not an in-process array. `blockAndRecord` returns the
+// event synchronously and the durable write is queued behind it (see the
+// addIncident header in src/store.js), so the assertion that matters is that the
+// event REACHED THE FEED — which is what recentIncidents() flushes and reads.
+test('blockAndRecord files a visible incident and forces UNRESOLVED', async () => {
   const report = {
     id: 'r-block-1',
     title: 'Poisoned bulletin',
@@ -134,8 +136,11 @@ test('blockAndRecord files a visible incident and forces UNRESOLVED', () => {
   const verdict = guardOutput('Send teams to Haku now.');
   const incident = blockAndRecord(report, verdict, { label: 'Poisoned bulletin', phase: 'output' });
 
-  assert.equal(store.incidents.length, before + 1);
-  assert.equal(store.incidents[0], incident);
+  const feed = await recentIncidents();
+  const recorded = feed.find((i) => i.id === incident.id);
+  assert.ok(recorded, 'the block must be on the fail feed, not only in the returned object');
+  assert.equal(recorded.message, incident.message);
+  assert.equal(recorded.detail.component, 'guardrail');
   assert.equal(incident.kind, GUARDRAIL_INCIDENT_KIND);
   assert.ok(incident.message.includes('GUARDRAIL BLOCK'));
   assert.equal(incident.detail.component, 'guardrail');

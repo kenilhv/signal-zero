@@ -22,11 +22,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-import { Suite } from '../lib/runner.js';
-import { runNode, runCmd, readJson, scratchPath, EVALS_DIR, ROOT } from '../lib/child.js';
-import { startServer } from '../lib/server.js';
+import { EVALS_DIR, ROOT, readJson, runCmd, runNode, scratchPath } from '../lib/child.js';
 import { findDispatchKeys, findDispatchLanguage } from '../lib/guard.js';
+import { Suite } from '../lib/runner.js';
+import { startServer } from '../lib/server.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAULT_PROBE = path.join(EVALS_DIR, 'probes', 'fault.mjs');
@@ -841,6 +840,250 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
               turns: back?.telemetry?.turns
             }
           });
+        }
+      }
+    }
+  }
+
+  // ==========================================================================
+  // D13 - THE FAULT THAT IS NOT A DEPENDENCY: THE PROCESS ITSELF DYING.
+  // ==========================================================================
+  // Every case above injects a fault into something the app talks to. This one
+  // injects the app. A restart is a fault like any other, and the question is
+  // the same one family D always asks: what does the system still know
+  // afterwards?
+  //
+  // Signal Zero's answer has to be "how long each settlement has been silent",
+  // because that is the only number it produces. A silence clock that forgets
+  // time cannot measure the one thing it claims to measure.
+  //
+  // WHY THIS ONE SCENARIO OPTS OUT OF THE SHARED DEFAULT: every other spawned
+  // server in this suite gets DATABASE_URL='' so scenarios cannot contaminate
+  // each other (see evals/lib/server.js). Durability is the one property that
+  // cannot be proved that way, so this case provisions its own throwaway
+  // database, uses it for both boots, and drops it afterwards — isolated AND
+  // real, rather than isolated OR real.
+  //
+  // The two boots differ in exactly one way: the second has an EMPTY corpus.
+  // That is not a contrivance, it is the realistic case — a restart is usually
+  // prompted by the same outage that stopped the reports — and it is the only
+  // setup that distinguishes the two builds. With the normal corpus the demo
+  // seed re-anchors its timestamps to the current clock on every load, so a
+  // non-durable build would produce the same numbers and the case would pass
+  // against a database that was never consulted.
+  {
+    const dbName = `sz_eval_${Date.now().toString(36)}_${process.pid.toString(36)}`;
+    const container = 'sz-pg';
+    const emptySeed = scratchPath('empty-corpus.json');
+    fs.writeFileSync(emptySeed, '[]');
+
+    const psql = (db, sql) =>
+      runCmd('docker', ['exec', '-i', container, 'psql', '-U', 'signalzero', '-d', db, '-c', sql], {
+        timeoutMs: 30000,
+        cwd: ROOT
+      });
+
+    /**
+     * Wait for a pass THIS PROCESS ran, not for whatever the store already held.
+     *
+     * server.waitForState() returns as soon as /api/state has settlements — and
+     * after a restart it has them immediately, because the ranking is now
+     * durable and a rebooted process serves the last known one rather than a
+     * blank screen. That is the persistence payoff working correctly, and it is
+     * also exactly how this case would silently compare boot 1 to boot 1 and
+     * declare victory. So the second boot waits for `lastRunAt` to MOVE.
+     */
+    const waitForNewRun = async (server, previousLastRunAt, timeoutMs = 90000) => {
+      const end = Date.now() + timeoutMs;
+      let last = null;
+      while (Date.now() < end) {
+        const res = await server.get('/api/state');
+        last = res?.json ?? last;
+        if (last?.stats?.lastRunAt && last.stats.lastRunAt !== previousLastRunAt) return last;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      return last;
+    };
+
+    // `allowDocker` is honoured here as well as the container check: a run
+    // launched with --offline or --no-docker has said it does not want to shell
+    // out, and reaching for docker anyway would make the flag a lie.
+    const canProvision = allowDocker && (await dockerRunning(container));
+    const created = canProvision
+      ? await psql('postgres', `CREATE DATABASE ${dbName}`)
+      : {
+          code: 1,
+          stderr: allowDocker
+            ? `container "${container}" is not running`
+            : 'docker is disabled for this run (--offline / --no-docker)'
+        };
+
+    if (created.code !== 0) {
+      // SKIPPED, NOT PASSED. A durability claim that could not be tested is not
+      // a durability claim that held.
+      suite.skip({
+        id: 'D13.1',
+        name: 'silence survives a process restart - it continues from the persisted observation instead of resetting',
+        severity: 'critical',
+        reason:
+          `could not provision a throwaway database (${(created.stderr || '').trim().slice(0, 200)}). ` +
+          `Needs the "${container}" Postgres container up. This proves nothing either way.`
+      });
+    } else {
+      const dbUrl = `postgres://signalzero:signalzero@localhost:5544/${dbName}`;
+      try {
+        // ---- BOOT 1: normal corpus, real database -------------------------
+        const first = await startServer({ port, env: { DATABASE_URL: dbUrl } });
+        let before = null;
+        let firstState = null;
+        if (first.healthy) {
+          firstState = (await first.waitForState({ timeoutMs: 90000 }))?.json ?? null;
+          before =
+            (firstState?.settlements ?? [])
+              .filter((s) => s.lastReportAt !== null)
+              .sort((a, b) => b.silenceHours - a.silenceHours)[0] ?? null;
+        }
+
+        suite.check({
+          id: 'D13.0',
+          name: 'the app boots against a fresh database, migrates it, and reports that it IS durable',
+          pass:
+            firstState?.persistence?.mode === 'postgres' &&
+            firstState?.persistence?.durable === true,
+          severity: 'critical',
+          evidence: {
+            persistence: firstState?.persistence ?? null,
+            observationsKnown: firstState?.stats?.observationsKnown ?? null,
+            stderr: first.log.stderr.slice(-600)
+          }
+        });
+
+        const killedAt = Date.now();
+        await first.stop();
+        // Real elapsed time, so "continued accruing" is measurable rather than a
+        // rounding artefact. silenceHours is rounded to 4dp, so ~4s is plenty.
+        await new Promise((r) => setTimeout(r, 4000));
+
+        // ---- BOOT 2: EMPTY corpus, SAME database --------------------------
+        const second = await startServer({
+          port,
+          env: { DATABASE_URL: dbUrl, SIGNAL_ZERO_SEED_PATH: emptySeed }
+        });
+        const secondState = second.healthy
+          ? await waitForNewRun(second, firstState?.stats?.lastRunAt ?? null)
+          : null;
+        const after =
+          (secondState?.settlements ?? []).find((s) => s.settlementId === before?.settlementId) ??
+          null;
+        const downHours = (Date.now() - killedAt) / 3_600_000;
+        await second.stop();
+
+        // ---- CONTROL: the same empty-corpus boot with NO database ---------
+        // Prints the number that WOULD have been reported before this phase, so
+        // the case above is legible as a difference rather than as an assertion.
+        // If this control ever stopped resetting, D13.1 would be a tautology.
+        const control = await startServer({ port, env: { SIGNAL_ZERO_SEED_PATH: emptySeed } });
+        // The control has no store to inherit from, so any completed pass is its
+        // own; waitForState is sufficient there.
+        const controlState = control.healthy
+          ? ((await control.waitForState({ timeoutMs: 90000 }))?.json ?? null)
+          : null;
+        const controlRow =
+          (controlState?.settlements ?? []).find((s) => s.settlementId === before?.settlementId) ??
+          null;
+        await control.stop();
+
+        const grew = before && after && after.silenceHours > before.silenceHours;
+        const sameAnchor = before && after && after.lastReportAt === before.lastReportAt;
+        const accruedByDowntime =
+          before && after && Math.abs(after.silenceHours - before.silenceHours - downHours) < 0.02;
+
+        suite.check({
+          id: 'D13.1',
+          name: 'silence survives a process restart - it continues from the persisted observation instead of resetting',
+          pass: Boolean(grew && sameAnchor && accruedByDowntime),
+          severity: 'critical',
+          evidence: {
+            settlementId: before?.settlementId ?? null,
+            beforeSilenceHours: before?.silenceHours ?? null,
+            afterSilenceHours: after?.silenceHours ?? null,
+            deltaHours:
+              before && after
+                ? Number((after.silenceHours - before.silenceHours).toFixed(4))
+                : null,
+            processDownHours: Number(downHours.toFixed(4)),
+            lastReportAtBefore: before?.lastReportAt ?? null,
+            lastReportAtAfter: after?.lastReportAt ?? null,
+            reportsInSecondPass: secondState?.stats?.reportCount ?? null,
+            observationsKnownAfter: secondState?.stats?.observationsKnown ?? null
+          }
+        });
+
+        suite.check({
+          id: 'D13.2',
+          name: 'the no-database control DOES reset - so D13.1 is measuring persistence and not a constant',
+          pass:
+            controlState?.persistence?.durable === false &&
+            controlRow !== null &&
+            controlRow.lastReportAt === null,
+          severity: 'critical',
+          evidence: {
+            persistence: controlState?.persistence ?? null,
+            controlSilenceHours: controlRow?.silenceHours ?? null,
+            controlLastReportAt: controlRow?.lastReportAt ?? null,
+            note: 'This is what the pre-Phase-2 build reported for the same restart: the clock forgotten, lastReportAt null.'
+          }
+        });
+
+        // Hard rule 4 across the restart. A settlement nothing has ever resolved
+        // to must still be null after a restart - the failure mode is a
+        // "helpful" backfill on the way back up, and it would be invisible in
+        // every other assertion here.
+        const neverObservedAfter = (secondState?.settlements ?? []).filter(
+          (s) => s.lastReportAt === null
+        );
+        suite.check({
+          id: 'D13.3',
+          name: 'a never-observed settlement is STILL null after the restart - absence of data is not backfilled on the way back up',
+          pass:
+            neverObservedAfter.length > 0 &&
+            neverObservedAfter.every((s) => s.coverageBasis === 'cohort-cold-start'),
+          severity: 'critical',
+          evidence: {
+            count: neverObservedAfter.length,
+            sample: neverObservedAfter.slice(0, 3).map((s) => ({
+              settlementId: s.settlementId,
+              lastReportAt: s.lastReportAt,
+              coverageBasis: s.coverageBasis
+            }))
+          }
+        });
+
+        // The decision log is the other thing that must not evaporate: an audit
+        // trail that a restart clears is not an audit trail.
+        const pendingAfter = (secondState?.checkpoint ?? []).length;
+        suite.check({
+          id: 'D13.4',
+          name: 'the checkpoint queue survives the restart - a human decision cannot be erased by a reboot',
+          pass: pendingAfter > 0,
+          severity: 'major',
+          evidence: {
+            checkpointItemsBefore: (firstState?.checkpoint ?? []).length,
+            checkpointItemsAfter: pendingAfter,
+            reportsInSecondPass: secondState?.stats?.reportCount ?? null
+          }
+        });
+
+        suite.metric('D13.processDownHours', Number(downHours.toFixed(4)));
+        suite.metric('D13.silenceBefore', before?.silenceHours ?? null);
+        suite.metric('D13.silenceAfter', after?.silenceHours ?? null);
+        suite.metric('D13.controlSilence', controlRow?.silenceHours ?? null);
+      } finally {
+        await psql('postgres', `DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+        try {
+          fs.unlinkSync(emptySeed);
+        } catch {
+          /* already gone */
         }
       }
     }

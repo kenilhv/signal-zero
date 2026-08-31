@@ -15,9 +15,9 @@
 // Approval unlocks a *shortlist of jurisdictions to inform*. It never produces an
 // assignment, a dispatch, or an instruction. See buildShortlist() for why.
 
-import { store, addIncident } from '../store.js';
-import { guardInput, guardOutput, describeVerdict, worstSeverity } from '../guardrails/index.js';
+import { describeVerdict, guardInput, guardOutput, worstSeverity } from '../guardrails/index.js';
 import * as drafter from '../harness/escalation-drafter.js';
+import { addIncident, repos } from '../store.js';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -101,11 +101,6 @@ function nextId(kind) {
   return `${prefix}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 }
 
-// Only approve()/reject() may move status. `status` is exposed as an enumerable
-// getter with a throwing setter, so `item.status = 'approved'` from anywhere else
-// (a route handler, a test, a future teammate in a hurry) fails loudly.
-const setStatusInternal = new WeakMap();
-
 /**
  * WHO WROTE THE WORDS A HUMAN IS ABOUT TO SIGN.
  *
@@ -148,29 +143,22 @@ function makeProvenance({
   };
 }
 
-function makeItem({ kind, settlementId, title, evidence, provenance }) {
-  assertNoDispatchFields(evidence ?? {});
-
-  let status = 'pending';
-
-  const item = {
-    id: nextId(kind),
-    kind,
-    settlementId: settlementId ?? null,
-    title: String(title ?? '').trim() || '(untitled checkpoint item)',
-    evidence: evidence ?? {},
-    // WHO WROTE THE WORDS THIS HUMAN IS ABOUT TO SIGN.
-    // Every item carries this, always, so the UI never has to infer it. See
-    // makeProvenance() - `source` is either 'harness-drafted' (the registered
-    // TrueForge agent wrote it and every guardrail accepted it) or 'template'
-    // (deterministic string templating here), and a template item always names
-    // the reason it is not a draft.
-    provenance: provenance ?? makeProvenance({ source: drafter.DRAFT_SOURCE.TEMPLATE }),
-    approvedBy: null,
-    decidedAt: null,
-    createdAt: new Date().toISOString()
-  };
-
+/**
+ * Wrap a repository row so `item.status = 'approved'` still throws.
+ *
+ * The authority for status moved into the database — `checkpoint_items.status`
+ * is a projection recomputed from the append-only `approvals` log, and there is
+ * no setter for it anywhere in src/db/repositories/checkpoint.js. This guard is
+ * the SECOND line, kept because it fails at the point of the mistake: assigning
+ * to a detached JS object would otherwise succeed silently and the caller would
+ * carry an object claiming a status the database never recorded. One throws
+ * immediately; the other is discovered later, by someone else.
+ */
+function decorateItem(row) {
+  if (!row) return null;
+  const status = row.status;
+  const item = { ...row };
+  delete item.status;
   Object.defineProperty(item, 'status', {
     enumerable: true,
     configurable: false,
@@ -185,12 +173,31 @@ function makeItem({ kind, settlementId, title, evidence, provenance }) {
       );
     }
   });
-
-  setStatusInternal.set(item, (next) => {
-    status = next;
-  });
-
   return item;
+}
+
+/**
+ * Build the DRAFT that goes to the store. It carries no status: status is not an
+ * input any more, it is what the approvals log projects, so a draft that named
+ * one would be asserting something it has no standing to assert.
+ */
+function makeItem({ kind, settlementId, title, evidence, provenance }) {
+  assertNoDispatchFields(evidence ?? {});
+
+  return {
+    id: nextId(kind),
+    kind,
+    settlementId: settlementId ?? null,
+    title: String(title ?? '').trim() || '(untitled checkpoint item)',
+    evidence: evidence ?? {},
+    // WHO WROTE THE WORDS THIS HUMAN IS ABOUT TO SIGN.
+    // Every item carries this, always, so the UI never has to infer it. See
+    // makeProvenance() - `source` is either 'harness-drafted' (the registered
+    // TrueForge agent wrote it and every guardrail accepted it) or 'template'
+    // (deterministic string templating here), and a template item always names
+    // the reason it is not a draft.
+    provenance: provenance ?? makeProvenance({ source: drafter.DRAFT_SOURCE.TEMPLATE })
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,38 +209,41 @@ function makeItem({ kind, settlementId, title, evidence, provenance }) {
  * Idempotent per settlement: a pipeline re-run will NOT pile up duplicate pending
  * escalations, and it will never resurrect one a human already decided.
  */
-export function createEscalation({ settlementId, title, evidence } = {}) {
-  const existing = store.checkpoint.find(
-    (i) => i.kind === 'escalation' && i.settlementId === (settlementId ?? null)
-  );
-  if (existing) return existing;
+export async function createEscalation({ settlementId, title, evidence, runId = null } = {}) {
+  // Idempotence is checked against the STORE, not against a process-local array,
+  // so a restarted process does not re-raise an escalation a human already
+  // decided before the restart. That is the same rule it always was; it now
+  // survives the thing it always claimed to survive.
+  const existing = await repos.checkpoint.list({
+    kind: 'escalation',
+    ...(settlementId ? { settlementId } : {})
+  });
+  const match = existing.find((i) => (i.settlementId ?? null) === (settlementId ?? null));
+  if (match) return decorateItem(match);
 
-  const item = makeItem({ kind: 'escalation', settlementId, title, evidence });
-  store.checkpoint.push(item);
-  return item;
+  const draft = makeItem({ kind: 'escalation', settlementId, title, evidence });
+  return decorateItem(await repos.checkpoint.create({ ...draft, runId }));
 }
 
 /**
  * A Fellegi-Sunter pair landed between the reject and accept thresholds.
  * The machine does not break the tie; a human does.
  */
-export function createAmbiguousMatch({ title, evidence, settlementId } = {}) {
+export async function createAmbiguousMatch({ title, evidence, settlementId, runId = null } = {}) {
   const fingerprint = ambiguousFingerprint(evidence);
   if (fingerprint) {
-    const existing = store.checkpoint.find(
-      (i) => i.kind === 'ambiguous-match' && ambiguousFingerprint(i.evidence) === fingerprint
-    );
-    if (existing) return existing;
+    const existing = await repos.checkpoint.list({ kind: 'ambiguous-match' });
+    const match = existing.find((i) => ambiguousFingerprint(i.evidence) === fingerprint);
+    if (match) return decorateItem(match);
   }
 
-  const item = makeItem({
+  const draft = makeItem({
     kind: 'ambiguous-match',
     settlementId: settlementId ?? null,
     title,
     evidence
   });
-  store.checkpoint.push(item);
-  return item;
+  return decorateItem(await repos.checkpoint.create({ ...draft, runId }));
 }
 
 // Stable key for "the same ambiguous pair", order-independent.
@@ -249,22 +259,29 @@ function ambiguousFingerprint(evidence) {
 // Lookup
 // ---------------------------------------------------------------------------
 
-export function getCheckpointItem(id) {
-  return store.checkpoint.find((i) => i.id === id) || null;
+export async function getCheckpointItem(id) {
+  return decorateItem(await repos.checkpoint.getById(id));
 }
 
-export function listCheckpoint(status) {
-  return status ? store.checkpoint.filter((i) => i.status === status) : store.checkpoint.slice();
+export async function listCheckpoint(status) {
+  const rows = await repos.checkpoint.list(status ? { status } : {});
+  return rows.map(decorateItem);
 }
 
 export function listPending() {
   return listCheckpoint('pending');
 }
 
-function decide(id, approvedBy, nextStatus) {
+async function decide(id, approvedBy, nextStatus) {
+  // assertApprover still runs FIRST and still returns HTTP 400. It is not
+  // redundant with the database's NOT NULL + non-blank CHECK on
+  // approvals.approved_by: this one produces a message a human can act on, and
+  // that one holds when this code is bypassed entirely. Two layers, on purpose —
+  // hard rule 2 is the product's headline claim, so it is enforced where the
+  // request arrives AND where the row lands.
   const name = assertApprover(approvedBy);
 
-  const item = getCheckpointItem(id);
+  const item = await getCheckpointItem(id);
   if (!item) {
     throw new CheckpointError(`No checkpoint item with id "${id}".`, 'NOT_FOUND', 404);
   }
@@ -276,17 +293,27 @@ function decide(id, approvedBy, nextStatus) {
     );
   }
 
-  setStatusInternal.get(item)(nextStatus);
-  item.approvedBy = name;
-  item.decidedAt = new Date().toISOString();
+  // Appends to the approvals log and reprojects status inside one transaction.
+  // There is no status setter to call: the decision IS the append.
+  const decided = decorateItem(
+    await repos.checkpoint.decide({ id, decision: nextStatus, approvedBy: name })
+  );
+  if (!decided) {
+    throw new CheckpointError(`No checkpoint item with id "${id}".`, 'NOT_FOUND', 404);
+  }
 
   addIncident(
     'heal',
-    `${nextStatus === 'approved' ? 'Approved' : 'Rejected'} by ${name}: ${item.title}`,
-    { checkpointId: item.id, kind: item.kind, settlementId: item.settlementId, approvedBy: name }
+    `${nextStatus === 'approved' ? 'Approved' : 'Rejected'} by ${name}: ${decided.title}`,
+    {
+      checkpointId: decided.id,
+      kind: decided.kind,
+      settlementId: decided.settlementId,
+      approvedBy: name
+    }
   );
 
-  return item;
+  return decided;
 }
 
 /** Approve. Requires a non-empty approver name. */
@@ -297,6 +324,11 @@ export function approve(id, approvedBy) {
 /** Reject. Requires a non-empty approver name too - a rejection is a decision on record. */
 export function reject(id, approvedBy) {
   return decide(id, approvedBy, 'rejected');
+}
+
+/** The append-only decision log for one item, oldest first. */
+export function listDecisions(id) {
+  return repos.checkpoint.listDecisions(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +354,7 @@ export function reject(id, approvedBy) {
  *
  * Deterministic and stable: same item + same gazetteer => byte-identical list.
  */
-export function buildShortlist(item, settlements = store.settlements) {
+export function buildShortlist(item, settlements = []) {
   const gazetteer = Array.isArray(settlements) ? settlements : [];
   if (gazetteer.length === 0) return [];
 
@@ -389,6 +421,7 @@ function slug(text) {
 
 export default {
   createEscalation,
+  listDecisions,
   createAmbiguousMatch,
   approve,
   reject,

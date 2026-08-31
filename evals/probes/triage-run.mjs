@@ -25,7 +25,17 @@ const input = JSON.parse(fs.readFileSync(inPath, 'utf8'));
 
 const config = (await import(new URL('../../src/config.js', import.meta.url))).default;
 const { triage } = await import(new URL('../../src/pipeline/triage.js', import.meta.url));
-const { store } = await import(new URL('../../src/store.js', import.meta.url));
+const { store, recentIncidents, initBackend } = await import(
+  new URL('../../src/store.js', import.meta.url)
+);
+// The store is forced into its NON-DURABLE mode here. This probe measures triage
+// behaviour, which both backends are required to agree on, and pointing it at the
+// shared Postgres would leave this probe's incidents in a table other eval
+// scenarios read. The incident FEED is read through recentIncidents(), which
+// flushes pending writes first — `store.incidents` is an outbox that drains as
+// writes land, so slicing it across an `await` would under-report.
+process.env.DATABASE_URL = '';
+await initBackend({ logger: null });
 const gazetteer = JSON.parse(
   fs.readFileSync(new URL('../../src/data/gazetteer.json', import.meta.url), 'utf8')
 );
@@ -77,17 +87,20 @@ if (input.perCase) {
   // case its own tier-3 budget - triage caps tier 3 at 6 classifications per
   // call, so batching would silently starve most of the set of the LLM path and
   // then report the result as if the LLM had been consulted.
+  // Diff the feed BY ID rather than by length. Lengths only work for an
+  // append-only array that nothing else touches; ids work regardless of ordering,
+  // flush timing, or anything else writing concurrently.
+  let seen = new Set((await recentIncidents({ limit: 500 })).map((i) => i.id));
   for (const r of reports) {
-    const before = store.incidents.length;
     await triage([r], gazetteer);
+    const feed = await recentIncidents({ limit: 500 });
     results.push({
       ...shape(r),
-      incidents: store.incidents.slice(0, store.incidents.length - before).map((i) => ({
-        kind: i.kind,
-        message: i.message,
-        detail: i.detail
-      }))
+      incidents: feed
+        .filter((i) => !seen.has(i.id))
+        .map((i) => ({ kind: i.kind, message: i.message, detail: i.detail }))
     });
+    seen = new Set(feed.map((i) => i.id));
   }
 } else {
   await triage(reports, gazetteer);
@@ -106,7 +119,11 @@ const out = {
   },
   harness: store.harness,
   results,
-  incidents: store.incidents.map((i) => ({ kind: i.kind, message: i.message, detail: i.detail }))
+  incidents: (await recentIncidents({ limit: 500 })).map((i) => ({
+    kind: i.kind,
+    message: i.message,
+    detail: i.detail
+  }))
 };
 
 fs.writeFileSync(outPath, JSON.stringify(out, null, 2));

@@ -1,0 +1,191 @@
+# Signal Zero — local stack.
+#
+#   docker compose up --build      # app + postgres. That is the whole command.
+#
+# HOST PORTS ARE DELIBERATELY NON-DEFAULT. This machine already runs containers
+# on the obvious ones, and a compose file that fights for a bound port fails with
+# an error about the port rather than about the conflict, which wastes ten minutes
+# every time:
+#
+#   5432 -> betterday-postgres-1        5433 -> darkspot-core-postgres-1
+#   5544 -> sz-pg  (the already-migrated Signal Zero database)
+#   4000 -> tforge (the already-running TrueForge)
+#   3000 -> a `npm start` dev server
+#
+# So this stack uses 3010 (app) and 5545 (postgres) and 4010 (harness profile).
+# Nothing here touches sz-pg on 5544 — this compose stack brings up its OWN
+# database in its OWN named volume. They coexist; see docs/DEPLOY.md for which
+# one you actually want.
+#
+# PROFILES — the default `up` must be fast and must work, so anything heavy is
+# opt-in:
+#   (default)       app + postgres
+#   harness         + TrueForge, for the two LLM touchpoints
+#   observability   RESERVED for Phase 3. Currently starts NOTHING — see below.
+
+name: signal-zero
+
+services:
+  # -------------------------------------------------------------------------
+  # Postgres — DIGEST PINNED, same major version as the running sz-pg (17).
+  # -------------------------------------------------------------------------
+  postgres:
+    # Pinned for the same reason as the Node base image: `17-alpine` is a moving
+    # tag. Resolved 2026-08-30 from `docker pull postgres:17-alpine`.
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    environment:
+      POSTGRES_USER: signalzero
+      POSTGRES_PASSWORD: signalzero
+      POSTGRES_DB: signalzero
+    ports:
+      # 5544 is taken by sz-pg. See the header.
+      - '5545:5432'
+    volumes:
+      - sz-compose-pgdata:/var/lib/postgresql/data
+      # Read-only. The Postgres entrypoint runs *.sql here in filename order,
+      # but ONLY when the data volume is empty — i.e. on first boot or after
+      # `docker compose down -v`. It is a seeder, not a migration runner: adding
+      # 002_*.sql will NOT apply it to a volume that already exists. Say so out
+      # loud rather than letting someone discover it against a stale database.
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # `pg_isready` alone answers "is the postmaster accepting connections",
+      # which goes true while the initdb scripts are still running. -U and -d
+      # make it authenticate as the real user against the real database, so it
+      # cannot go green before the schema above has been applied.
+      test: ['CMD-SHELL', 'pg_isready -U signalzero -d signalzero']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # App
+  # -------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: signal-zero:local
+    depends_on:
+      postgres:
+        # service_healthy, NOT service_started. `started` only means the
+        # container process exists — Postgres accepts TCP well before it accepts
+        # queries, so `started` produces a race that fails maybe one boot in five
+        # and looks like a flaky app rather than a missing condition.
+        condition: service_healthy
+    ports:
+      - '3010:3000'
+    environment:
+      PORT: '3000'
+
+      # Topology overrides. These MUST be set here rather than left to .env,
+      # because .env is written for a process running on the host, where the
+      # database is localhost:5544 and TrueForge is localhost:4000. Inside the
+      # compose network those names resolve to nothing.
+      #
+      # HONEST STATUS: as of this commit NOTHING IN src/ READS DATABASE_URL.
+      # `pg` is in package.json and the schema is in db/migrations, but the
+      # running app still uses the in-memory src/store.js. This variable is
+      # wired so the Phase 2 store swap needs no compose change — it is not
+      # evidence that the app is persisting anything yet.
+      DATABASE_URL: postgres://signalzero:signalzero@postgres:5432/signalzero
+
+      TRUEFORGE_BASE_URL: http://trueforge:4000
+
+      # THESE TWO KNOBS ARE DELIBERATELY RENAMED (SZ_ prefix), and the reason is
+      # a bug this file actually shipped for one commit.
+      #
+      # Compose auto-loads ./.env to resolve ${...} substitutions. Writing
+      # `USE_LIVE_SCRAPE: ${USE_LIVE_SCRAPE:-false}` therefore did NOT default to
+      # false: .env sets USE_LIVE_SCRAPE=true for host-side `npm start`, so the
+      # default `docker compose up` silently came up live-scraping — slow, network
+      # dependent, and spending Bright Data credit nobody asked it to spend. The
+      # `:-false` looked like a safe default while being dead code.
+      #
+      # A compose-scoped name cannot collide with the host's own .env keys, so the
+      # containerised default is now deterministic no matter what .env says. The
+      # host config still governs the host; this governs the container.
+      #
+      #   SZ_USE_LIVE_SCRAPE=true docker compose up     # opt in explicitly
+      USE_LIVE_SCRAPE: ${SZ_USE_LIVE_SCRAPE:-false}
+      # Off by default so the default `up` is fast and needs no model credentials.
+      # The harness profile does not flip this on by itself — starting a container
+      # cannot rewrite another container's environment.
+      TRUEFORGE_ENABLED: ${SZ_TRUEFORGE_ENABLED:-false}
+    env_file:
+      # RUNTIME environment, which is categorically different from a build layer:
+      # this injects credentials into the running container and leaves no trace in
+      # the image. It is the correct place for the keys that .dockerignore keeps
+      # OUT of the build. required:false so the stack still comes up cleanly on a
+      # machine with no .env at all — src/config.js defaults every value and
+      # degrades to offline mode rather than crashing.
+      - path: .env
+        required: false
+    # src/server.js installs no SIGTERM handler, so as PID 1 it would ignore
+    # `docker compose stop` until the 10s grace expired and it got SIGKILLed.
+    # tini forwards the signal and reaps zombies. Cheaper than editing src/.
+    init: true
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # PROFILE: harness — TrueForge, the agent runtime behind the two LLM touchpoints
+  # -------------------------------------------------------------------------
+  # Opt-in because it is genuinely slow: the command below npx-installs TrueForge
+  # on every start, which is tens of seconds and a network dependency. Keeping it
+  # out of the default `up` is the difference between a 10-second stack and a
+  # 90-second one.
+  #
+  #   docker compose --profile harness up --build
+  #
+  # This mirrors the recipe already documented in .env.example: TrueForge crashes
+  # when run natively on Windows (upstream ESM bug, docs/trueforge-verified.md),
+  # so it runs the published package in a container.
+  #
+  # A FRESH TrueForge has an EMPTY agent registry. Signal Zero binds sessions to
+  # agents BY NAME, so until you run `node scripts/load-agents.mjs` against it,
+  # tier 3 falls back to an inline AgentSpec and says so on the incident feed.
+  # It degrades honestly; it does not pretend the roster was used.
+  trueforge:
+    profiles: ['harness']
+    image: node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf
+    command: ['sh', '-lc', 'npx -y @truefoundry/trueforge@latest']
+    environment:
+      PORT: '4000'
+      HOST: '0.0.0.0'
+    ports:
+      # 4000 is taken by the already-running `tforge` container.
+      - '4010:4000'
+    init: true
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # PROFILE: observability — RESERVED FOR PHASE 3. STARTS NOTHING TODAY.
+  # -------------------------------------------------------------------------
+  # `docker compose --profile observability up` is currently a NO-OP, and that is
+  # a deliberate choice rather than an oversight.
+  #
+  # The obvious placeholder is a Prometheus scraping the app. That would be a lie
+  # in the shape of infrastructure: src/server.js exposes /api/health and
+  # /api/state and NO /metrics endpoint, so the scrape would fail on every
+  # interval while a green-looking "observability stack" sat in `docker ps`. A
+  # dashboard that reports nothing is strictly worse than an absent dashboard,
+  # because it answers the question "are we watching this?" with a yes.
+  #
+  # Wiring it up requires an instrumentation endpoint in src/, which this change
+  # is explicitly not permitted to add. When Phase 3 adds /metrics, uncomment and
+  # fill in below — the profile name is reserved so no compose surgery is needed:
+  #
+  #   prometheus:
+  #     profiles: ['observability']
+  #     image: prom/prometheus:vX.Y.Z@sha256:...   # pin the digest
+  #     ports: ['9090:9090']
+  #     volumes: ['./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro']
+  #
+  # Until then this comment is the whole implementation, and DEPLOY.md says so.
+
+volumes:
+  # Named, and distinct from whatever sz-pg uses, so `docker compose down -v`
+  # can never destroy the already-migrated database on 5544 by accident.
+  sz-compose-pgdata:

@@ -492,7 +492,34 @@ function clusterSettlementId(cluster, reportById) {
  * @param {object[]} clusters    dedup output (same-event groups)
  * @param {object[]} reports     every report seen this run
  * @param {Date|string|number} now evaluation time (defaults to Date.now())
- * @param {{adjacency?: object, emitIncidents?: boolean}} [opts]
+ * @param {{adjacency?: object, emitIncidents?: boolean,
+ *          observations?: Array<{settlementId:string, observedAt:string|Date|null}>}} [opts]
+ *
+ * ---------------------------------------------------------------------------
+ * `opts.observations` — WHERE THE SILENCE CLOCK ACTUALLY READS FROM
+ * ---------------------------------------------------------------------------
+ * When supplied, this is the FULL history from the append-only observations
+ * table: every confirming observation that has ever resolved to a settlement,
+ * across every run, including runs from processes that have since exited. It is
+ * the authoritative input to the clock and it is why silence survives a restart.
+ *
+ * When it is NOT supplied, the clock falls back to the times in `reports`, which
+ * only covers THIS pass. That fallback is why every unit test and property eval
+ * that calls rank() with a hand-built corpus still works unchanged — but note
+ * what it costs in production: reports are per-run, so a restarted process would
+ * measure silence from its own boot rather than from the last real observation.
+ * That is precisely the bug persistence exists to fix, so the orchestrator in
+ * src/server.js always passes `observations`.
+ *
+ * WHEN SUPPLIED, OBSERVATIONS ARE THE ONLY SOURCE OF SETTLEMENT TIMES, and the
+ * report times are deliberately NOT unioned in. The orchestrator writes this
+ * pass's observations before reading them back, so every report that could
+ * produce a time is already represented; adding the reports on top would count
+ * each one twice — thirteen reports at one instant would become twenty-six —
+ * and reportCount, corroborationCount and the inter-arrival gaps would all
+ * inherit the duplication. Reports still contribute `windowStartMs`, because the
+ * observation window opened when the earliest report arrived whether or not that
+ * report resolved to anywhere.
  */
 export function rank(settlements, clusters, reports, now, opts = {}) {
   const adjacency = opts.adjacency ?? DEFAULT_ADJACENCY;
@@ -502,21 +529,41 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
   const list = Array.isArray(settlements) ? settlements.filter(Boolean) : [];
   const allReports = Array.isArray(reports) ? reports.filter(Boolean) : [];
   const allClusters = Array.isArray(clusters) ? clusters.filter(Boolean) : [];
+  const allObservations = Array.isArray(opts.observations) ? opts.observations.filter(Boolean) : [];
 
   // ---- index reports by settlement, chronologically ------------------------
   const reportById = new Map();
   const timesBySettlement = new Map();
   let windowStartMs = null;
 
+  // Persisted observations, when the caller has them, are the authority for
+  // "when was this settlement last heard from". See the doc comment above.
+  const timesFromObservations = allObservations.length > 0;
+
+  const noteTime = (sid, t) => {
+    if (t === null) return;
+    if (windowStartMs === null || t < windowStartMs) windowStartMs = t;
+    if (!sid) return; // unresolved: cannot inform any settlement
+    if (!timesBySettlement.has(sid)) timesBySettlement.set(sid, []);
+    timesBySettlement.get(sid).push(t);
+  };
+
+  // A NULL observedAt never reaches here — the schema declares that column NOT
+  // NULL and the repository throws rather than guessing — but toMillis returning
+  // null is still handled, and it DROPS the row rather than substituting a time.
+  for (const o of allObservations) {
+    noteTime(o.settlementId, toMillis(o.observedAt));
+  }
+
   for (const r of allReports) {
     if (r.id) reportById.set(r.id, r);
     const t = reportTimeMs(r);
-    if (t === null) continue;
-    if (windowStartMs === null || t < windowStartMs) windowStartMs = t;
-    const sid = r.settlementId;
-    if (!sid) continue; // unresolved reports cannot inform any settlement
-    if (!timesBySettlement.has(sid)) timesBySettlement.set(sid, []);
-    timesBySettlement.get(sid).push(t);
+    if (timesFromObservations) {
+      // Window start only: the settlement's own times came from the fact table.
+      if (t !== null && (windowStartMs === null || t < windowStartMs)) windowStartMs = t;
+    } else {
+      noteTime(r.settlementId, t);
+    }
   }
   for (const times of timesBySettlement.values()) times.sort((a, b) => a - b);
 
@@ -585,17 +632,32 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
   }
 
   const eventTimesBySettlement = new Map();
-  for (const r of allReports) {
-    const sid = r.settlementId;
-    if (!sid) continue;
-    const t = reportTimeMs(r);
-    if (t === null) continue;
-    const eventKey = clusterIdByReport.get(r.id) ?? r.clusterId ?? `report:${r.id ?? t}`;
+  const noteEvent = (sid, t, eventKey) => {
+    if (!sid || t === null) return;
     if (!eventTimesBySettlement.has(sid)) eventTimesBySettlement.set(sid, new Map());
     const byEvent = eventTimesBySettlement.get(sid);
     // one event contributes the moment it FIRST reached us
     const prev = byEvent.get(eventKey);
     if (prev === undefined || t < prev) byEvent.set(eventKey, t);
+  };
+
+  // Persisted observations carry the cluster and report ids they came from, so
+  // an observation written this pass and the report behind it collapse onto the
+  // SAME event key and contribute one gap, not two. Without that the fit would
+  // see a zero-length gap for every report and pin lambda to the floor — the
+  // identical failure the "reports, not clusters" comment above describes.
+  if (timesFromObservations) {
+    for (const o of allObservations) {
+      const t = toMillis(o.observedAt);
+      const key = o.clusterId ?? (o.reportId ? `report:${o.reportId}` : `obs:${t}`);
+      noteEvent(o.settlementId, t, key);
+    }
+  } else {
+    for (const r of allReports) {
+      const t = reportTimeMs(r);
+      const key = clusterIdByReport.get(r.id) ?? r.clusterId ?? `report:${r.id ?? t}`;
+      noteEvent(r.settlementId, t, key);
+    }
   }
 
   const cohortRescaled = new Map(); // cohortKey -> number[] of u = lambda0 * gap
@@ -668,9 +730,13 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
     const expectedGapHours = 1 / lambda;
     const surprisal = surprisalFor(lambda, silenceHours);
 
-    // 'reports' = this settlement has spoken for itself at least once.
-    // 'cohort-cold-start' = total silence since the window opened; every number
-    // for it is borrowed from its cohort, so the UI must say so out loud.
+    // 'reports' = this settlement has spoken for itself at least once, EVER —
+    // `times` now spans the whole observations table, not just this pass, so a
+    // settlement heard from last week is no longer relabelled cold-start today.
+    // 'cohort-cold-start' = nothing has ever resolved here; every number for it
+    // is borrowed from its cohort, so the UI must say so out loud. Note that
+    // lastReportAt below stays NULL in that case: cold-start and "we know when
+    // it last reported" are mutually exclusive, and hard rule 4 is the reason.
     const coverageBasis = times.length > 0 ? 'reports' : 'cohort-cold-start';
 
     if (

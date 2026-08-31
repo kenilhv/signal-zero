@@ -21,7 +21,25 @@ const { rank, qualifiesForEscalation } = await import(
 const { createEscalation } = await import(
   new URL('../../src/pipeline/checkpoint.js', import.meta.url)
 );
-const { store } = await import(new URL('../../src/store.js', import.meta.url));
+const { listCheckpoint } = await import(
+  new URL('../../src/pipeline/checkpoint.js', import.meta.url)
+);
+const { recentIncidents, initBackend } = await import(
+  new URL('../../src/store.js', import.meta.url)
+);
+
+// This probe runs against the NON-DURABLE store ON PURPOSE, and the choice is
+// forced rather than inherited from whatever .env holds.
+//
+// What is being tested here is that an empty ingest does not crash the STAGES
+// and does not manufacture confidence — a property of the pipeline, not of the
+// storage, and one the two backends are required to agree on. Running it against
+// the shared Postgres would additionally write checkpoint rows for real
+// gazetteer ids into a database other eval scenarios read, which would make this
+// probe's side effects somebody else's flaky test. The mode is recorded in the
+// output so a reader of the report knows which store produced these numbers.
+process.env.DATABASE_URL = '';
+const persistenceMode = await initBackend({ logger: null });
 
 const gazetteer = JSON.parse(
   fs.readFileSync(new URL('../../src/data/gazetteer.json', import.meta.url), 'utf8')
@@ -51,13 +69,16 @@ try {
   stages.fitBases = [...new Set(ranked.map((r) => r.fitBasis))];
   stages.sampleRow = ranked[0];
   for (const r of ranked.filter((x) => qualifiesForEscalation(x)).slice(0, 3)) {
-    createEscalation({
+    // Awaited: createEscalation writes to the store now. Without the await the
+    // count below would race the writes and this probe would report zero
+    // checkpoint items on a run that raised three.
+    await createEscalation({
       settlementId: r.settlementId,
       title: `Anomalous silence: ${r.name}`,
       evidence: { settlementId: r.settlementId, silenceHours: r.silenceHours }
     });
   }
-  stages.checkpointItems = store.checkpoint.length;
+  stages.checkpointItems = (await listCheckpoint()).length;
 } catch (err) {
   threw = String(err && err.stack ? err.stack : err);
 }
@@ -68,8 +89,9 @@ fs.writeFileSync(
     {
       survived: threw === null,
       threw,
+      persistence: { mode: persistenceMode.mode, durable: persistenceMode.durable },
       stages,
-      incidents: store.incidents.map((i) => ({
+      incidents: (await recentIncidents({ limit: 500 })).map((i) => ({
         kind: i.kind,
         message: i.message,
         detail: i.detail

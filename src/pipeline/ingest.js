@@ -28,7 +28,17 @@ import { store, addIncident } from '../store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', 'data');
-const SEED_PATH = path.join(DATA_DIR, 'seed-reports.json');
+/**
+ * The offline corpus. Overridable by SIGNAL_ZERO_SEED_PATH, which exists as a
+ * TEST SEAM for the restart test: the realistic way "silence must survive a
+ * restart" fails is a source outage spanning the restart, and reproducing that
+ * needs a boot whose ingest legitimately returns nothing. Pointing this at an
+ * empty corpus is how that is staged without disabling the stage or stubbing it,
+ * so the pass under test is the real one. Unset in every normal run.
+ */
+const SEED_PATH =
+  String(process.env.SIGNAL_ZERO_SEED_PATH ?? '').trim() ||
+  path.join(DATA_DIR, 'seed-reports.json');
 const GAZETTEER_PATH = path.join(DATA_DIR, 'gazetteer.json');
 
 // ---------------------------------------------------------------------------

@@ -20,18 +20,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
-import { Suite } from '../lib/runner.js';
-import { runNode, writeScratch, readJson, EVALS_DIR } from '../lib/child.js';
-import { startServer } from '../lib/server.js';
+import { EVALS_DIR, readJson, runNode, writeScratch } from '../lib/child.js';
 import {
+  CERTAINTY_POSITIVE_CONTROLS,
+  DETECTOR_NEGATIVE_CONTROLS,
+  DETECTOR_POSITIVE_CONTROLS,
   findDispatchKeys,
   findDispatchLanguage,
-  findFalseCertainty,
-  DETECTOR_POSITIVE_CONTROLS,
-  CERTAINTY_POSITIVE_CONTROLS,
-  DETECTOR_NEGATIVE_CONTROLS
+  findFalseCertainty
 } from '../lib/guard.js';
+import { Suite } from '../lib/runner.js';
+import { startServer } from '../lib/server.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(HERE, '..', '..', 'src');
@@ -584,7 +583,15 @@ export async function runFamilyC({ trueforgeUrl, harnessReachable, port }) {
   const accepted = [];
   for (const d of dispatchEvidence) {
     try {
-      createEscalation({ settlementId: `probe-${d.label}`, title: 'probe', evidence: d.evidence });
+      // AWAITED. createEscalation writes to the store now, so it is async; an
+      // un-awaited call would reject in the background, the try/catch would see
+      // nothing, and every one of these probes would be recorded as "accepted"
+      // while the process died on an unhandled rejection. The await is the test.
+      await createEscalation({
+        settlementId: `probe-${d.label}`,
+        title: 'probe',
+        evidence: d.evidence
+      });
       accepted.push(d.label);
     } catch (err) {
       if (!(err instanceof CheckpointError) || err.code !== 'DISPATCH_FIELD_FORBIDDEN') {
@@ -619,8 +626,18 @@ export async function runFamilyC({ trueforgeUrl, harnessReachable, port }) {
     evidence: { accepted: acceptedNames }
   });
 
-  // status must not be settable from outside approve()/reject()
-  const probeItem = createEscalation({
+  // Status must not be settable from outside approve()/reject().
+  //
+  // This got STRONGER with the move to the store, and the check was widened to
+  // match rather than relaxed to accommodate. There are now two independent
+  // things to prove, and the second one is the one that matters:
+  //   1. assigning to `item.status` throws (checkpoint.js decorateItem), and
+  //   2. even if it had not thrown, THE STORE IS UNMOVED — status there is a
+  //      projection of the append-only approvals log, and a write to a detached
+  //      JS object cannot touch it.
+  // Asserting only (1) would pass on a build where the object was a copy and the
+  // real status had already been changed by something else.
+  const probeItem = await createEscalation({
     settlementId: 'probe-status',
     title: 'probe',
     evidence: { settlementId: 'np-rasuwa-haku' }
@@ -632,12 +649,21 @@ export async function runFamilyC({ trueforgeUrl, harnessReachable, port }) {
   } catch {
     statusWritable = false;
   }
+  const reread = await checkpointMod.getCheckpointItem(probeItem.id);
   suite.check({
     id: 'C2.3',
-    name: 'a checkpoint item cannot be marked approved by writing to it - only approve()/reject() may move status',
-    pass: !statusWritable && probeItem.status === 'pending',
+    name: 'a checkpoint item cannot be marked approved by writing to it - only approve()/reject() may move status, and the STORE is unmoved either way',
+    pass:
+      !statusWritable &&
+      probeItem.status === 'pending' &&
+      reread?.status === 'pending' &&
+      reread?.approvedBy === null,
     severity: 'critical',
-    evidence: { status: probeItem.status }
+    evidence: {
+      status: probeItem.status,
+      statusInStore: reread?.status ?? null,
+      approvedByInStore: reread?.approvedBy ?? null
+    }
   });
 
   // ==========================================================================

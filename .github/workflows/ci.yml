@@ -58,6 +58,33 @@ jobs:
         run: npm run lint || echo "::warning::Biome lint findings above are a known, tracked backlog (BUILD-PLAN 1.2) and do not fail the build yet."
 
   # --------------------------------------------------------------------------
+  openapi:
+    name: openapi description is valid
+    runs-on: ubuntu-latest
+    # openapi.yaml is a DESCRIPTION of the API that src/server.js serves today,
+    # not a proposal for one. A hand-written description rots the moment nobody
+    # parses it, and a rotted contract is worse than none -- it is a claim with a
+    # filename. Redocly's linter is pinned to an exact version so a new release
+    # cannot turn this gate red without anyone changing the file.
+    #
+    # `lint` exits 0 on warnings and non-zero on errors. The three warnings it
+    # currently prints are all TRUE STATEMENTS about this API and are left
+    # visible on purpose rather than silenced with an ignore file:
+    #   * the only server is localhost (it is a local demo);
+    #   * GET /api/health and GET /api/state declare no 4xx, because neither
+    #     route has one -- /api/health is a liveness probe that answers 200 even
+    #     when every pipeline stage failed to load.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Lint openapi.yaml
+        run: npm run openapi:lint
+
+  # --------------------------------------------------------------------------
   test:
     name: tests (node ${{ matrix.node }})
     runs-on: ubuntu-latest
@@ -65,6 +92,34 @@ jobs:
       fail-fast: false
       matrix:
         node: ['20', '24']
+    # A REAL POSTGRES, because the tests that need one are written to FAIL
+    # rather than skip when it is missing (see src/db/test-helpers.js). That is
+    # the right call -- a silently-skipped database suite is indistinguishable
+    # from a passing one -- but it makes the service part of the contract, not
+    # an optimisation. What is under test here is Postgres behaviour: that a
+    # NULL survives a round trip, that approvals.approved_by rejects a blank
+    # name, that the silence query uses its index. A fake would only prove the
+    # fake agrees with itself.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: signalzero
+          POSTGRES_PASSWORD: signalzero
+          POSTGRES_DB: signalzero
+        ports:
+          - 5544:5432
+        options: >-
+          --health-cmd "pg_isready -U signalzero -d signalzero"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Matches LOCAL_DATABASE_URL in src/db/pool.js, so the tests find it with
+      # no special-casing. The schema is applied by the migration runner on the
+      # first connection -- this database starts genuinely empty, so 001 is
+      # RUN here rather than adopted, which is the path a fresh deploy takes.
+      DATABASE_URL: postgres://signalzero:signalzero@localhost:5544/signalzero
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -163,3 +218,199 @@ jobs:
             exit 1
           fi
           echo "No stale eval-file counts asserted as fact."
+
+  # --------------------------------------------------------------------------
+  docker:
+    name: image builds, boots, and answers /api/health
+    runs-on: ubuntu-latest
+    # A Dockerfile that has only ever been read is not a Dockerfile that works.
+    # This job makes three separate claims and proves each one, because they fail
+    # independently:
+    #
+    #   1. IT BUILDS      -- catches syntax, a bad digest, a lockfile that drifted
+    #                        out of sync with package.json (npm ci fails loudly).
+    #   2. IT BOOTS       -- catches everything a build cannot: a missing runtime
+    #                        file that .dockerignore excluded, a permission error
+    #                        from USER node, a bad CMD. A green build with a
+    #                        crash-looping container is the normal way this breaks.
+    #   3. IT HAS NO .env -- the regression test for the one mistake that cannot be
+    #                        undone after it ships. See the step for why it plants
+    #                        a decoy rather than trusting a clean runner.
+    #
+    # No new actions are introduced: ubuntu-latest ships Docker and Compose, and
+    # actions/checkout is already pinned above. Fewer third-party actions in a
+    # workflow that builds an image is the point, not an accident.
+    permissions:
+      # Nothing is pushed to a registry. The image is built, run, and discarded.
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the image
+        run: docker build -t signal-zero:ci .
+
+      # ---------------------------------------------------------------------
+      - name: Secret cannot reach an image layer (decoy .env)
+        # A CI runner has no .env, so "no .env in the image" would pass here even
+        # if the Dockerfile said `COPY . .` -- the test would be green and
+        # worthless, and the failure would only appear on a developer laptop that
+        # HAS credentials. So plant a decoy with a value that exists nowhere else,
+        # rebuild, and hunt for that exact string.
+        #
+        # This is the regression test for .dockerignore AND for the no-`COPY . .`
+        # rule in the Dockerfile. If either is weakened, this goes red here rather
+        # than silently in a published layer, where deleting the file in a later
+        # layer does not help: `docker history` still reads the old one back.
+        run: |
+          CANARY="sz-canary-not-a-real-secret-8f3a1c"
+
+          # This step WRITES .env, which on a CI runner is harmless (the file is
+          # gitignored and never checked out) but would destroy a developer's real
+          # credentials if anyone ran these lines locally to debug the job. Stash
+          # and restore unconditionally, via a trap so it also runs on the early
+          # `exit 1` paths below. Costs two lines; removes the one way this step
+          # could do damage.
+          # `if`, not `[ -f .env ] && mv ...`: GitHub runs these steps under
+          # `bash -e`, where a && list whose first test is false returns non-zero
+          # and kills the step. On a CI runner .env never exists, so that form
+          # would fail exactly where it is supposed to be a no-op.
+          if [ -f .env ]; then mv .env .env.ci-backup; fi
+          restore() {
+            rm -f .env
+            if [ -f .env.ci-backup ]; then mv .env.ci-backup .env; fi
+            return 0
+          }
+          trap restore EXIT
+
+          printf 'BRIGHTDATA_API_TOKEN=%s\n' "$CANARY" > .env
+          docker build -t signal-zero:ci-canary .
+
+          echo "--- is the file present in the image? ---"
+          COUNT=$(docker run --rm --entrypoint sh signal-zero:ci-canary \
+                    -c 'ls -a /app | grep -c "^\.env$" || true')
+          echo "/app/.env count: $COUNT"
+
+          echo "--- does the canary value appear in image history? ---"
+          if docker history --no-trunc signal-zero:ci-canary | grep -qF "$CANARY"; then
+            echo "::error::A credential value reached the image history. Do not publish this image."
+            rm -f .env
+            exit 1
+          fi
+
+          echo "--- does the canary value appear in any layer blob? ---"
+          # DECOMPRESS before grepping. `docker save` writes layer blobs as gzip,
+          # so a plain `grep -r` over the unpacked tar finds nothing whether or not
+          # the secret is there -- it reports "clean" for a Dockerfile that leaks.
+          # That exact blind check was written here first and was caught only by
+          # running it against a deliberately bad `COPY . .` image, which it passed.
+          # A check that cannot fail is not evidence, so this one decompresses and
+          # is verified against a known-leaking build before being trusted.
+          docker save signal-zero:ci-canary -o /tmp/ci-img.tar
+          mkdir -p /tmp/ci-unpack && tar -xf /tmp/ci-img.tar -C /tmp/ci-unpack
+          # Two shell traps avoided here, both of which fail in the direction that
+          # reports a leaking image as clean:
+          #
+          #   * `grep ... && HITS=$((HITS+1))` dies under `bash -e` when grep finds
+          #     nothing -- i.e. on the healthy path. Putting the pipeline in an
+          #     `if` condition exempts it from `set -e` entirely.
+          #   * `DATA=$(gzip -dc ...)` silently STRIPS NULL BYTES ("ignored null
+          #     byte in input"), because command substitution cannot carry binary.
+          #     Layer blobs are tar archives full of nulls. Piping straight into
+          #     grep keeps the bytes intact.
+          HITS=0
+          for f in $(find /tmp/ci-unpack -type f); do
+            case "$(file -b "$f")" in
+              *gzip*) DECOMP="gzip -dc" ;;
+              *zstd*) DECOMP="zstd -dc" ;;
+              *)      DECOMP="cat" ;;
+            esac
+            if $DECOMP "$f" 2>/dev/null | grep -a -qF "$CANARY"; then
+              HITS=$((HITS + 1))
+              echo "leak in blob: $f"
+            fi
+          done
+          echo "layer blobs containing the canary: $HITS"
+          if [ "$HITS" -ne 0 ]; then
+            echo "::error::A credential value is readable inside an image layer. Do not publish this image."
+            exit 1
+          fi
+
+          rm -f .env
+          if [ "$COUNT" != "0" ]; then
+            echo "::error::/app/.env exists in the image."
+            exit 1
+          fi
+          echo "PASS: .env absent from the filesystem, the history, and every layer blob."
+
+      # ---------------------------------------------------------------------
+      - name: Boot the image and curl /api/health
+        run: |
+          docker run -d --name sz-ci -p 3010:3000 \
+            -e USE_LIVE_SCRAPE=false -e TRUEFORGE_ENABLED=false \
+            signal-zero:ci
+
+          # Poll rather than sleep: a fixed sleep is either flaky or slow, and
+          # picking which one is a guess about a runner's load.
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:3010/api/health > /tmp/health.json 2>/dev/null; then
+              echo "healthy after ${i}s"; break
+            fi
+            sleep 1
+          done
+
+          echo "--- GET /api/health ---"
+          cat /tmp/health.json; echo
+
+          # Assert on the payload, not merely on a 200. The route is a liveness
+          # probe that answers 200 even when the pipeline is broken, so a bare
+          # status check would pass on a badly degraded container.
+          node -e "
+            const h = require('/tmp/health.json');
+            if (h.ok !== true) { console.error('health.ok was', h.ok); process.exit(1); }
+            console.log('health.ok === true');
+          "
+
+          echo "--- the container's own HEALTHCHECK agrees ---"
+          for i in $(seq 1 45); do
+            S=$(docker inspect --format '{{.State.Health.Status}}' sz-ci)
+            [ "$S" = "healthy" ] && break
+            [ "$S" = "unhealthy" ] && { echo "::error::HEALTHCHECK reports unhealthy"; break; }
+            sleep 1
+          done
+          echo "docker health status: $(docker inspect --format '{{.State.Health.Status}}' sz-ci)"
+          test "$(docker inspect --format '{{.State.Health.Status}}' sz-ci)" = "healthy"
+
+          echo "--- runs as non-root ---"
+          docker exec sz-ci id
+          test "$(docker exec sz-ci id -u)" != "0"
+
+      - name: Container logs
+        if: always()
+        run: docker logs sz-ci || true
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f sz-ci || true
+
+      # ---------------------------------------------------------------------
+      - name: Compose stack comes up with one command
+        # The image booting alone does not prove the compose file: the postgres
+        # healthcheck and the `service_healthy` gate are where this stack actually
+        # breaks. `up --wait` returns non-zero unless every service reaches
+        # healthy, so this is the assertion, not the setup for one.
+        run: |
+          docker compose up -d --wait --wait-timeout 180
+          docker compose ps
+          echo "--- app answers through the compose port ---"
+          curl -fsS http://localhost:3010/api/health; echo
+          echo "--- db/migrations seeded the fresh volume ---"
+          docker compose exec -T postgres psql -U signalzero -d signalzero \
+            -c "SELECT count(*) AS tables FROM information_schema.tables WHERE table_schema='public';"
+
+      - name: Compose logs
+        if: always()
+        run: docker compose logs || true
+
+      - name: Tear down compose (volume included)
+        if: always()
+        run: docker compose down -v || true

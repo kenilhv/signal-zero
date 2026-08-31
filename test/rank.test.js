@@ -4,26 +4,26 @@
 //   - Getis-Ord Gi* local spatial statistic over the corridor graph
 // Run with: node --test test/
 
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { test } from 'node:test';
 
 import {
-  rank,
+  buildWeights,
+  coalesceEventTimes,
+  cohortKeyFor,
+  ESCALATION_MIN_SILENCE_HOURS,
+  ESCALATION_MIN_SURPRISAL_NATS,
   fitExponentialRate,
   getisOrdGiStar,
-  buildWeights,
-  cohortKeyFor,
-  populationBucket,
-  surprisalFor,
-  priorRatePerHour,
-  coalesceEventTimes,
-  qualifiesForEscalation,
+  LAMBDA_MAX_PER_HOUR,
+  LAMBDA_MIN_PER_HOUR,
   PRIOR_EXPECTED_GAP_HOURS,
   PRIOR_STRENGTH_GAPS,
-  LAMBDA_MIN_PER_HOUR,
-  LAMBDA_MAX_PER_HOUR,
-  ESCALATION_MIN_SURPRISAL_NATS,
-  ESCALATION_MIN_SILENCE_HOURS,
+  populationBucket,
+  priorRatePerHour,
+  qualifiesForEscalation,
+  rank,
+  surprisalFor,
   Z_CRITICAL
 } from '../src/pipeline/rank.js';
 import { store } from '../src/store.js';

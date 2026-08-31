@@ -81,21 +81,63 @@ const S = {
   sort: { key: 'rank', dir: 'asc' },
   actFilter: 'all',
   local: [],
+  // THE SERVER'S OWN VIEW of the pass in flight — `run` from GET /api/state. Null
+  // when this process has not started one, which is NOT "no pass has ever run"
+  // (that is `stats.lastRunAt`). Everything the stage rail renders comes from
+  // here, so the rail can no longer claim progress the server did not report.
+  run: null,
+  runFetchedAt: 0,
   running: false,
-  runStartedAt: 0,
+  // Set at the moment this client's own POST /api/run is accepted, and cleared by
+  // the first poll that carries the server's answer. It covers the sub-second
+  // window between the 202 and the next state read, so the button does not flick
+  // back to idle before the server has said anything.
+  runOptimisticUntil: 0,
   showAllDecided: false,
   releases: new Map(), // settlementId -> { approvedBy, decidedAt, shortlist }
   adjacency: null
 };
 
-const STAGES = [
-  { id: 'ingest', label: 'Ingest' },
-  { id: 'triage', label: 'Triage' },
-  { id: 'dedup', label: 'Dedup' },
-  { id: 'rank', label: 'Rank' },
-  { id: 'checkpoint', label: 'Checkpoint' },
-  { id: 'ready', label: 'Ready' }
+// The pipeline's stages, mirroring src/http/run-progress.js RUN_STAGES.
+//
+// This list used to end in a `Ready` row, which was not a stage — it was a state
+// wearing a stage's clothes on a rail whose other rows are real. It is gone; the
+// rail's sub-line says "Ready" when the pass is done.
+//
+// `observe` and `persist` are new here and were previously INVISIBLE: the server
+// already wrote `detail.stage: "observe"` on a failed observation write, and the
+// rail silently dropped it because the id was not in this list. A degraded stage
+// nobody can see on the stage rail is the fail feed's job undone.
+const STAGE_LABELS = {
+  ingest: 'Ingest',
+  triage: 'Triage',
+  dedup: 'Dedup',
+  observe: 'Observe',
+  rank: 'Rank',
+  checkpoint: 'Checkpoint',
+  persist: 'Persist'
+};
+const DEFAULT_STAGE_IDS = [
+  'ingest',
+  'triage',
+  'dedup',
+  'observe',
+  'rank',
+  'checkpoint',
+  'persist'
 ];
+
+/**
+ * The stages to render. The SERVER publishes its own list on `run.stages`, so
+ * that is preferred: if the pipeline gains a stage, the rail gains a row without
+ * this file being edited, and it can never show a stage the server does not run.
+ * The constant above is only the shape to draw before any state has arrived.
+ */
+function stageList() {
+  const ids =
+    Array.isArray(S.run && S.run.stages) && S.run.stages.length ? S.run.stages : DEFAULT_STAGE_IDS;
+  return ids.map((id) => ({ id, label: STAGE_LABELS[id] || id }));
+}
 
 const el = {};
 let mapCtl = null;
@@ -161,8 +203,23 @@ async function pollState() {
   S.parseSample = null;
   S.retryMs = 4000;
   const prev = S.state;
+  const prevRun = S.run;
   S.state = normalise(res.body);
   S.fetchedAt = Date.now();
+  // THE SERVER'S RUN STATE REPLACES THE CLIENT'S GUESS. Once a poll carries an
+  // answer, the optimistic window is over regardless of what it says: if the pass
+  // already finished, the button must stop spinning; if another client started
+  // one, this rail must show it.
+  S.run = res.body.run && typeof res.body.run === 'object' ? res.body.run : null;
+  S.runFetchedAt = Date.now();
+  S.runOptimisticUntil = 0;
+  S.running = isRunning();
+  if (prevRun && prevRun.status === 'running' && S.run && S.run.status === 'error') {
+    logLocal(
+      `Pipeline pass ${S.run.runId} failed${S.run.stage ? ` during ${S.run.stage}` : ''}: ${S.run.error || 'no reason reported'}`,
+      S.run
+    );
+  }
   renderApiBanner(null);
   if (wasStale) logLocal('Reconnected to the Signal Zero API. Live state restored.');
 
@@ -181,9 +238,43 @@ function normalise(body) {
     settlements,
     checkpoint: Array.isArray(body.checkpoint) ? body.checkpoint.filter(Boolean) : [],
     incidents: Array.isArray(body.incidents) ? body.incidents.filter(Boolean) : [],
+    // One PAGE of the feed, plus what the server says about the rest of it. The
+    // feed is unbounded now; this is how many of it arrived, not how many exist.
+    incidentTotal: Number.isFinite(Number(body.incidentTotal)) ? Number(body.incidentTotal) : null,
+    incidentPageSize: Number.isFinite(Number(body.incidentPageSize))
+      ? Number(body.incidentPageSize)
+      : null,
+    incidentHasMore: body.incidentHasMore === true,
     sources: Array.isArray(body.sources) ? body.sources.filter(Boolean) : [],
     stats: body.stats && typeof body.stats === 'object' ? body.stats : {}
   };
+}
+
+/**
+ * A message a human can read out of an RFC 9457 problem document.
+ *
+ * Every error from this API is `application/problem+json` now: `detail` is the
+ * sentence about THIS occurrence, `title` is the sentence about the class of
+ * failure, and `type` is the stable identity to branch on. `error` is checked
+ * last only so an older server answering a newer page still says something
+ * useful rather than "HTTP 500".
+ */
+function problemMessage(body, status, fallback) {
+  if (body && typeof body === 'object') {
+    for (const key of ['detail', 'title', 'error']) {
+      if (typeof body[key] === 'string' && body[key].trim()) return body[key];
+    }
+  }
+  return fallback || `HTTP ${status}`;
+}
+
+/** A key that makes ONE submission safe to repeat. See src/http/idempotency.js. */
+function idempotencyKey(prefix) {
+  const rand =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${rand}`;
 }
 
 function loopPoll() {
@@ -515,16 +606,75 @@ function renderHumanBand() {
 // What the agent is doing — pipeline stages, status track, pass numbers.
 // ══════════════════════════════════════════════════════════════════════════
 
+/** Is a pass in flight? The SERVER's answer, with a short optimistic window. */
+function isRunning() {
+  if (S.run && S.run.status === 'running') return true;
+  // Between our 202 and the first poll that reflects it, the server has not said
+  // anything yet. `runOptimisticUntil` covers exactly that gap and expires on its
+  // own, so a lost poll cannot leave the button spinning forever.
+  return Date.now() < S.runOptimisticUntil;
+}
+
+/**
+ * How long the in-flight pass has been running, in whole seconds, or null.
+ *
+ * SERVER-MEASURED, extended by the client's own elapsed time since the poll that
+ * carried it. Reading `Date.parse(run.startedAt)` against the browser's clock
+ * instead would show a negative timer on any machine whose clock is a few seconds
+ * ahead of the server's, and a stopwatch that counts backwards is worse than none.
+ */
+function runElapsedSeconds() {
+  if (!S.run || S.run.status !== 'running') return null;
+  const base = Number(S.run.elapsedMs);
+  if (!Number.isFinite(base)) return null;
+  return Math.max(0, Math.floor((base + (Date.now() - S.runFetchedAt)) / 1000));
+}
+
+function clock(secs) {
+  return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
+}
+
 let lastAnnounced = '';
 function renderStages() {
   const st = S.state ? S.state.stats : null;
   const hasRun = !!(st && st.lastRunAt);
   const failedStages = failedStagesInLastRun();
-  const mode = S.running ? 'running' : hasRun ? 'done' : 'pending';
-  document.body.classList.toggle('is-running', S.running);
+  const running = isRunning();
+  const errored = !!(S.run && S.run.status === 'error');
+  const mode = running ? 'running' : hasRun ? 'done' : 'pending';
+  // ONE source of truth for "a pass is in flight", derived from the server's
+  // answer. Everything else in this file reads S.running; nothing else sets it.
+  S.running = running;
+  document.body.classList.toggle('is-running', running);
+
+  // The run button reflects the SERVER's single-flight state, not this tab's.
+  // Two tabs open on one deployment now agree: the one that did not click still
+  // sees the button held while the pass runs, instead of offering an action the
+  // server would answer with 409.
+  if (el.btnRun) {
+    el.btnRun.disabled = running;
+    if (running) el.btnRun.setAttribute('aria-busy', 'true');
+    else el.btnRun.removeAttribute('aria-busy');
+  }
+
+  // WHICH STAGES THE SERVER SAYS ARE DONE. Not a guess from elapsed time, not
+  // every row lit at once: `run.stagesCompleted` and `run.stage` are reported by
+  // the orchestrator at the point each stage actually begins.
+  const completed = new Set(
+    running && S.run && Array.isArray(S.run.stagesCompleted) ? S.run.stagesCompleted : []
+  );
+  const activeStage = running && S.run ? S.run.stage : null;
 
   const stateOf = (id) => {
-    if (mode === 'running') return 'active';
+    if (mode === 'running') {
+      if (failedStages.has(id)) return 'failed';
+      if (id === activeStage) return 'active';
+      if (completed.has(id)) return 'done';
+      // Null `run.stage` means the server has not reported one yet. Nothing is
+      // lit rather than everything: "we do not know which stage" is a fact, and
+      // lighting the whole rail to look busy would invent one.
+      return 'pending';
+    }
     if (mode === 'done') return failedStages.has(id) ? 'failed' : 'done';
     return 'pending';
   };
@@ -538,9 +688,11 @@ function renderStages() {
           ? 'running'
           : 'not started';
 
+  const stages = stageList();
+
   // Full labels, never clipped, at every width.
   clear(el.stageList);
-  for (const stage of STAGES) {
+  for (const stage of stages) {
     const state = stateOf(stage.id);
     el.stageList.append(
       h(
@@ -554,14 +706,30 @@ function renderStages() {
   }
 
   clear(el.sbTrack);
-  for (const stage of STAGES) {
+  for (const stage of stages) {
     el.sbTrack.append(h('i', { 'data-state': stateOf(stage.id), title: stage.label }));
   }
 
   let sub;
   if (mode === 'running') {
-    const secs = Math.floor((Date.now() - S.runStartedAt) / 1000);
-    sub = `Running — the server does not report per-stage progress · ${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
+    const secs = runElapsedSeconds();
+    const label = activeStage ? STAGE_LABELS[activeStage] || activeStage : null;
+    const where = label ? `Running ${label.toLowerCase()}` : 'Running';
+    // Every clause below is something the server said. When it has said nothing
+    // yet — the window between our 202 and the first poll — the line says exactly
+    // that instead of filling in a stage or a stopwatch.
+    sub =
+      secs === null
+        ? `${where} · waiting for the first progress report`
+        : `${where} · ${clock(secs)}` +
+          (completed.size ? ` · ${completed.size} of ${stages.length} stages complete` : '');
+  } else if (errored && S.run) {
+    // A pass that failed used to disappear behind the previous pass's "Ready".
+    // The run id is here so the failure can be found in the fail feed and in the
+    // runs table.
+    sub =
+      `Last pass failed${S.run.stage ? ` during ${S.run.stage}` : ''}: ${S.run.error || 'no reason reported'}` +
+      ` · run ${S.run.runId}`;
   } else if (mode === 'done') {
     sub =
       `Ready · last complete pass ${relTime(st.lastRunAt) || 'just now'}` +
@@ -583,20 +751,42 @@ function renderStages() {
   }
 }
 
-// A stage is marked failed only if the server actually wrote an incident naming it
-// inside the last run's own window. The rail never guesses.
+/**
+ * A stage is marked failed only if the server actually wrote an incident naming
+ * it inside THE WINDOW OF THE PASS THE RAIL IS SHOWING. The rail never guesses.
+ *
+ * The window is the load-bearing part. While a pass is in flight the rail is
+ * headed "This pass", so it must not carry the PREVIOUS pass's degradations
+ * forward: a triage failure ten minutes ago is not evidence about a run that
+ * started four seconds ago, and showing it as one would have a reviewer watching
+ * a stage fail that had not yet been reached. So the window starts at
+ * `run.startedAt` — the server's own start time for the run being displayed —
+ * and the rail comes up clean, filling in only what this pass actually reports.
+ */
 function failedStagesInLastRun() {
   const out = new Set();
-  const st = S.state && S.state.stats;
-  if (!st || !st.lastRunAt) return out;
-  const end = Date.parse(st.lastRunAt);
-  const start = end - (Number(st.durationMs) || 0) - 2000;
+  if (!S.state) return out;
+  const st = S.state.stats;
+
+  let start;
+  let end;
+  if (S.run && S.run.status === 'running' && S.run.startedAt) {
+    start = Date.parse(S.run.startedAt) - 2000;
+    end = Infinity;
+  } else {
+    if (!st || !st.lastRunAt) return out;
+    end = Date.parse(st.lastRunAt) + 2000;
+    start = end - (Number(st.durationMs) || 0) - 4000;
+  }
+  if (!Number.isFinite(start)) return out;
+
+  const known = new Set(stageList().map((s) => s.id));
   for (const inc of S.state.incidents) {
     if (inc.kind !== 'degraded-source') continue;
     const t = Date.parse(inc.at);
-    if (!Number.isFinite(t) || t < start || t > end + 2000) continue;
+    if (!Number.isFinite(t) || t < start || t > end) continue;
     const stage = inc.detail && inc.detail.stage;
-    if (stage && STAGES.some((s) => s.id === stage)) out.add(stage);
+    if (stage && known.has(stage)) out.add(stage);
   }
   return out;
 }
@@ -649,44 +839,78 @@ function renderPassKv() {
   }
 }
 
+/**
+ * START a pass. The request no longer waits for it.
+ *
+ * POST /api/run answers 202 in milliseconds with a run id; the pass itself takes
+ * roughly 45 seconds and proceeds on the server. So this function's job ends at
+ * "accepted", and everything after that — which stage, how long, whether it
+ * failed — is read from GET /api/state, which this page already polls.
+ *
+ * That is a better view than the one it replaces, not a worse one. The old
+ * blocking call could only show a client-side stopwatch and a rail that lit every
+ * stage at once, and its sub-line said so: "the server does not report per-stage
+ * progress". It does now.
+ *
+ * The `Idempotency-Key` makes the submission safe to repeat: if the network
+ * retries this POST, the server replays the same 202 with the same run id instead
+ * of queueing a second pass. See src/http/idempotency.js.
+ */
 async function runPipeline() {
-  if (S.running) return;
+  if (isRunning()) {
+    toast('A pipeline pass is already running.', 'warn', 5000);
+    return;
+  }
+  // Optimistic only until the next poll answers — two seconds, not forever.
+  S.runOptimisticUntil = Date.now() + 2000;
   S.running = true;
-  S.runStartedAt = Date.now();
   el.btnRun.disabled = true;
   el.btnRun.setAttribute('aria-busy', 'true');
   logLocal('Pipeline run requested from the console.');
   renderStages();
-  const tick = setInterval(renderStages, 1000);
   try {
     const res = await fetchJson(
       '/api/run',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
-      180000
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey('run')
+        },
+        body: '{}'
+      },
+      20000
     );
     if (res.status === 409) {
+      const runId = res.body && res.body.runId;
       toast('A pipeline pass is already running.', 'warn', 5000);
-      logLocal('Run rejected: a pipeline pass was already in flight (HTTP 409).');
-    } else if (!res.ok) {
-      const msg = (res.body && res.body.error) || `HTTP ${res.status}`;
-      toast(`Pipeline run failed: ${msg}`, 'critical', 10000);
-      logLocal(`Pipeline run failed: ${msg}`, res.body || null);
+      logLocal(
+        `Run not started: a pass was already in flight (HTTP 409${runId ? `, run ${runId}` : ''}).`,
+        res.body || null
+      );
+    } else if (res.status !== 202) {
+      S.runOptimisticUntil = 0;
+      const msg = problemMessage(res.body, res.status);
+      toast(`Pipeline run could not be started: ${msg}`, 'critical', 10000);
+      logLocal(`Pipeline run could not be started: ${msg}`, res.body || null);
     } else {
       const b = res.body || {};
+      // ACCEPTED, not finished. The wording matters: a line saying the pass
+      // "completed" here would be a claim this client is in no position to make.
       logLocal(
-        `Pipeline pass finished: ${fmtCount(b.reportCount)} reports, ${fmtCount(b.clusterCount)} clusters in ${b.durationMs}ms.`,
+        `Pipeline pass ${b.runId} accepted (HTTP 202). Progress is on the stage rail; it is read from the server, not timed here.`,
         b
       );
     }
   } catch (err) {
+    S.runOptimisticUntil = 0;
     toast('Could not reach the server to start a pipeline pass.', 'critical', 10000);
     logLocal(`Pipeline run could not be started: ${err.message}`);
   } finally {
-    clearInterval(tick);
-    S.running = false;
     el.btnRun.disabled = false;
     el.btnRun.removeAttribute('aria-busy');
-    renderStages();
+    // Ask immediately rather than waiting out the poll interval, so the rail
+    // picks up the server's first stage report as soon as there is one.
     pollState();
   }
 }
@@ -2101,7 +2325,23 @@ function openModal(itemId, readOnly = false) {
     }
   }
 
-  modal = { scrim, dlg, item, readOnly, opener, submitting: false, decided: null, shortlist: null };
+  modal = {
+    scrim,
+    dlg,
+    item,
+    readOnly,
+    opener,
+    submitting: false,
+    decided: null,
+    shortlist: null,
+    // ONE IDEMPOTENCY KEY PER (item, action, name) ATTEMPT, minted lazily below
+    // and REUSED by the Retry button. That reuse is the point: a decision whose
+    // response was lost to a timeout is exactly the case where a human clicks
+    // again, and without a key the retry either writes a second row into an
+    // append-only decision log or comes back 409 with no way to tell whether the
+    // first attempt landed. With one, the server replays the first answer.
+    idempotencyKeys: new Map()
+  };
   dlg.addEventListener('keydown', onModalKey);
   renderModal();
   dlg.focus();
@@ -2576,11 +2816,22 @@ function decisionFooter() {
 
     let res;
     try {
+      // Keyed on the action AND the name: changing the name is a different
+      // decision and must not replay the previous one's answer. The server
+      // enforces that too — a reused key with a changed body is refused with
+      // 409 idempotency-key-reuse rather than silently replayed.
+      const keySeed = `${action}:${name}`;
+      if (!modal.idempotencyKeys.has(keySeed)) {
+        modal.idempotencyKeys.set(keySeed, idempotencyKey('decide'));
+      }
       res = await fetchJson(
         `/api/checkpoint/${encodeURIComponent(modal.item.id)}/${action}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': modal.idempotencyKeys.get(keySeed)
+          },
           body: JSON.stringify({ approvedBy: name })
         },
         20000
@@ -2616,9 +2867,11 @@ function decisionFooter() {
     }
     if (res.status === 400 && res.body && res.body.code === 'APPROVER_REQUIRED') {
       help.classList.add('err');
-      help.textContent =
-        res.body.error ||
-        'A named human approver is required. Nothing in Signal Zero becomes actionable anonymously.';
+      help.textContent = problemMessage(
+        res.body,
+        res.status,
+        'A named human approver is required. Nothing in Signal Zero becomes actionable anonymously.'
+      );
       input.setAttribute('aria-invalid', 'true');
       input.focus();
       return;
@@ -2630,16 +2883,18 @@ function decisionFooter() {
       return;
     }
     if (res.status === 409) {
-      const b = res.body || {};
+      // The server's `detail` NAMES THE HUMAN who decided first — that is the
+      // whole point of the conflict, and paraphrasing it here would drop the name.
+      // (This line previously read `b.status`, which under RFC 9457 is the integer
+      // 409, and would have rendered "This item was already 409".)
+      const detail = problemMessage(
+        res.body,
+        res.status,
+        'This item was already decided by someone else.'
+      );
       modal.dlg
         .querySelector('.dlg-body')
-        .prepend(
-          h(
-            'div',
-            { class: 'conflict' },
-            `This item was already ${b.status || 'decided'}${b.approvedBy ? ` by ${b.approvedBy}` : ''}. Refreshing the queue.`
-          )
-        );
+        .prepend(h('div', { class: 'conflict' }, `${detail} Refreshing the queue.`));
       for (const bt of [reject, approve]) {
         bt.setAttribute('aria-disabled', 'true');
         bt.disabled = true;
@@ -2651,9 +2906,11 @@ function decisionFooter() {
     }
     if (!res.ok || !res.body || !res.body.ok) {
       help.classList.add('err');
-      help.textContent =
-        (res.body && res.body.error) ||
-        `The server rejected the decision (HTTP ${res.status}). No decision was recorded.`;
+      help.textContent = problemMessage(
+        res.body,
+        res.status,
+        `The server rejected the decision (HTTP ${res.status}). No decision was recorded.`
+      );
       return;
     }
 
@@ -3276,8 +3533,14 @@ function boot() {
     renderCheckpoint();
     renderSources();
     syncMapStaleness();
-    if (!S.running) renderStages();
+    if (!isRunning()) renderStages();
   }, 15000);
+  // The stopwatch on the stage rail. One second, unconditionally, and it only
+  // repaints while a pass is in flight — the seconds it shows are the server's
+  // own `run.elapsedMs` carried forward, not a client-side count from the click.
+  setInterval(() => {
+    if (isRunning()) renderStages();
+  }, 1000);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
