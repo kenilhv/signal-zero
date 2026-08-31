@@ -866,7 +866,7 @@ signals inability to size a solution, which is the opposite of the intended effe
 
 **[INFERENCE]** Signal Zero's statistical and agentic core is already well above the level of a
 typical portfolio project — Fellegi-Sunter linkage, a Gamma-prior exponential baseline, Getis-Ord
-Gi*, deterministic guardrails, 195 tests and 69 evals are not common. What is missing is entirely
+Gi*, deterministic guardrails, 195 tests and 157 eval checks are not common. What is missing is entirely
 **operational**: it cannot remember, cannot be deployed, cannot be observed, and has a known
 performance regression with no measurement behind it. The postings I retrieved screen for exactly
 that axis — Cloudflare's repeated framing of owning a system through staged deployment and incident

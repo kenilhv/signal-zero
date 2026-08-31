@@ -321,14 +321,12 @@ export async function runFamilyB() {
             anomalyType: fresh.anomalyType,
             isEscalationCandidate: fresh.isEscalationCandidate
           },
-          outrankedSilent: silentAbove
-            .slice(0, 3)
-            .map((r) => ({
-              name: r.name,
-              rank: r.rank,
-              silenceHours: r.silenceHours,
-              gi: r.giZScore
-            }))
+          outrankedSilent: silentAbove.slice(0, 3).map((r) => ({
+            name: r.name,
+            rank: r.rank,
+            silenceHours: r.silenceHours,
+            gi: r.giZScore
+          }))
         };
         violations.push(record);
         if (fresh.rank <= 10) topTenViolations.push(record);

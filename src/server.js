@@ -746,12 +746,10 @@ app.post('/api/demo/fail/:kind', (req, res) => {
     if (kind === 'coldstart' || kind === 'cold-start') {
       return res.json({ ok: true, incident: simulateColdStart() });
     }
-    res
-      .status(400)
-      .json({
-        ok: false,
-        error: `Unknown failure kind "${kind}". Use source | ambiguous | coldstart.`
-      });
+    res.status(400).json({
+      ok: false,
+      error: `Unknown failure kind "${kind}". Use source | ambiguous | coldstart.`
+    });
   } catch (err) {
     console.error('[signal-zero] demo failure error:', err);
     res.status(500).json({ ok: false, error: err.message });

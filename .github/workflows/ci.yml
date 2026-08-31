@@ -1,0 +1,165 @@
+name: CI
+
+# Nothing in this repository is credible until a machine runs it. 195 unit tests
+# and 157 eval checks that only ever ran on one laptop are a claim, not evidence.
+#
+# Two deliberate choices worth reading before editing:
+#
+#   1. The eval job runs `--offline`, NOT `--strict`. Those two flags are mutually
+#      exclusive by construction: `--offline` makes every live-dependency case SKIP,
+#      and `--strict` makes a SKIP a failure. Together they can never pass. `--strict`
+#      belongs in a nightly job with the real TrueForge container, not on a PR.
+#
+#   2. Node 20 AND 24. package.json declares `engines: ">=20"` and development
+#      happens on 24. That claim has never been tested. If 20 goes red, the matrix
+#      is doing its job -- fix the code or raise the floor, do not delete the matrix.
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege. Nothing here writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every job must run without a single credential. The pipeline is designed to
+  # degrade honestly when its dependencies are absent, and CI is where that gets
+  # proven rather than asserted.
+  USE_LIVE_SCRAPE: 'false'
+  TRUEFORGE_ENABLED: 'false'
+
+jobs:
+  # --------------------------------------------------------------------------
+  lint:
+    name: lint + format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Biome format check
+        run: npm run format:check
+      - name: Biome lint
+        # Not yet gating. The tree currently carries a known backlog (mostly
+        # useOptionalChain) and a red gate everyone learns to ignore is worse
+        # than an honest warning. Flip to a hard failure once the backlog is
+        # cleared -- tracked in docs/BUILD-PLAN.md item 1.2.
+        run: npm run lint || echo "::warning::Biome lint findings above are a known, tracked backlog (BUILD-PLAN 1.2) and do not fail the build yet."
+
+  # --------------------------------------------------------------------------
+  test:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Coverage (reported, not gated)
+        # Line coverage measures execution, not assertion: a test that calls a
+        # function and asserts nothing scores the same as one that asserts
+        # everything. Published as a gap-finder, never as a target.
+        if: matrix.node == '24'
+        run: npm run test:coverage || true
+
+  # --------------------------------------------------------------------------
+  evals:
+    name: evals (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      - name: Run eval suite (offline)
+        # No TrueForge, no model key, no network. Families A/B/C run their
+        # deterministic cases; anything needing a live dependency SKIPS and the
+        # skip count is printed below rather than hidden.
+        run: npm run eval -- --offline
+
+      - name: Report skips
+        if: always()
+        run: |
+          node -e "
+            const fs=require('fs');
+            const p='evals/report/latest.json';
+            if(!fs.existsSync(p)){console.log('::warning::no eval report produced');process.exit(0);}
+            const r=JSON.parse(fs.readFileSync(p,'utf8'));
+            const t=r.totals||{};
+            console.log('## Eval suite (offline)');
+            console.log('');
+            console.log('| total | passed | failed | critical | skipped |');
+            console.log('|---|---|---|---|---|');
+            console.log(\`| \${t.total} | \${t.passed} | \${t.failed} | \${t.criticalFailures} | \${t.skipped} |\`);
+            console.log('');
+            for(const f of r.families||[]){
+              const s=f.summary||{};
+              console.log(\`- **\${f.family}** — \${s.pass}/\${s.total} pass, \${s.fail} fail, \${s.skip} skip\`);
+            }
+            console.log('');
+            console.log('_Offline run: live-dependency cases SKIP by design. The nightly job runs them against a real TrueForge container._');
+          " >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eval-report
+          path: evals/report/latest.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # --------------------------------------------------------------------------
+  docs-truth:
+    name: published numbers match the report
+    runs-on: ubuntu-latest
+    # This job exists because a number in this repository went stale and survived
+    # in prose: evals/README.md claimed 138 checks and a harm-weighted error rate
+    # of 0.281 vs 0.375 long after the suite had grown to 157 checks and the rate
+    # had moved to 0.1875 vs 0.1875. Nobody lied -- a human copied a number and
+    # the number moved. Now a machine checks.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: evals/README.md is in sync with evals/report/latest.json
+        run: npm run eval:sync:check
+
+      - name: No stale eval-file count anywhere in the docs
+        # BUILD-PLAN.md and GAP-ANALYSIS.md are excluded on purpose: they are the
+        # documents that RECORD the correction, so they quote the wrong figure in
+        # order to name it. A check that cannot tell a claim from a citation of a
+        # retracted claim would force those two files to lie about their own history.
+        run: |
+          if grep -rn --include='*.md' \
+               --exclude=BUILD-PLAN.md --exclude=GAP-ANALYSIS.md \
+               -E '69 eval (files|checks)|69 evals' . ; then
+            echo "::error::Found the stale '69 eval files' figure asserted as fact. The real number is 19 tracked files / 4 families / 157 checks."
+            exit 1
+          fi
+          echo "No stale eval-file counts asserted as fact."

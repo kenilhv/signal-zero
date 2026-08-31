@@ -42,6 +42,27 @@ if (!fs.existsSync(REPORT)) {
 
 const report = JSON.parse(fs.readFileSync(REPORT, 'utf8'));
 const t = report.totals ?? {};
+
+// A PARTIAL RUN MUST NEVER BECOME THE PUBLISHED NUMBER.
+//
+// `npm run eval -- --offline` writes to this same path, and its report is a
+// strictly weaker claim: live-dependency cases SKIP rather than run. Without this
+// guard the sequence "run offline locally, commit, CI checks in sync" quietly
+// republishes 136 checks with 4 skipped as though it were the full 157, and
+// every downstream check agrees with it because they all read the same file.
+//
+// The published block is sourced only from a complete run. --allow-partial exists
+// for deliberate inspection and says so in the output.
+const allowPartial = process.argv.includes('--allow-partial');
+const skipped = Number(t.skipped ?? 0);
+if (skipped > 0 && !allowPartial) {
+  fail_(
+    `refusing to publish a PARTIAL run: ${skipped} of ${t.total} checks were skipped.\n` +
+      `  This report is almost certainly from \`npm run eval -- --offline\`, where live cases skip.\n` +
+      `  Publish only a complete run:  npm run eval  (then re-run this script)\n` +
+      `  To inspect a partial run anyway:  node scripts/sync-eval-readme.mjs --allow-partial`
+  );
+}
 const A = (report.families ?? []).find((f) => String(f.family).startsWith('A'));
 const delta = A?.metrics?.llmDelta ?? null;
 
