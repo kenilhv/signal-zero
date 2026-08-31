@@ -85,11 +85,18 @@ services:
       # database is localhost:5544 and TrueForge is localhost:4000. Inside the
       # compose network those names resolve to nothing.
       #
-      # HONEST STATUS: as of this commit NOTHING IN src/ READS DATABASE_URL.
-      # `pg` is in package.json and the schema is in db/migrations, but the
-      # running app still uses the in-memory src/store.js. This variable is
-      # wired so the Phase 2 store swap needs no compose change — it is not
-      # evidence that the app is persisting anything yet.
+      # HONEST STATUS: this is now load-bearing. src/db/backend.js reads it at
+      # boot and binds the repositories to Postgres; without it the app still
+      # serves, but in NON-DURABLE memory mode, and says so on /api/state,
+      # on the boot banner and on the incident feed.
+      #
+      # Note what applies the schema here, because it is NOT the migration
+      # runner: the postgres service mounts ./db/migrations at
+      # /docker-entrypoint-initdb.d, so on a fresh volume the entrypoint runs
+      # 001 and 002 before the app connects, and the app's runner then ADOPTS
+      # 001 rather than applying it. See the header on that volume mount — it is
+      # a seeder, not a migration runner, and it does nothing to a volume that
+      # already exists.
       DATABASE_URL: postgres://signalzero:signalzero@postgres:5432/signalzero
 
       TRUEFORGE_BASE_URL: http://trueforge:4000

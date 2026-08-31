@@ -21,8 +21,10 @@ Section 3 maps each of those three to a specific screen element. Section 5 is th
 | Method | Path | Returns |
 |---|---|---|
 | `GET` | `/api/health` | `{ ok, lastRunAt }` |
-| `GET` | `/api/state` | `{ settlements[], checkpoint[], incidents[], sources[], stats }` |
-| `POST` | `/api/run` | `{ ok, reportCount, clusterCount, durationMs }` — **409** `{ ok:false, error }` if a pass is already running |
+| `GET` | `/api/state` | `{ settlements[], checkpoint[], incidents[], incidentTotal, incidentPageSize, incidentCursor, incidentHasMore, run, sources[], persistence, harness, stats }` |
+| `POST` | `/api/run` | **202** `{ ok, status:'accepted', runId, startedAt, progressUrl }` — the pass runs asynchronously; progress is `GET /api/state` → `run`. **409** problem document if a pass is already running |
+| `GET` | `/api/incidents` | `{ ok, incidents[], nextCursor, hasMore, pageSize, total }` — keyset-paged, default 100 / max 500 |
+| `GET` | `/api/checkpoint/:id` | `{ ok, item, decisions[] }` — the item plus its append-only decision log |
 | `GET` | `/api/settlement/:id` | `{ ok, settlement, ranked, reports[], clusters[], neighbors[], checkpoint[], scoreBreakdown }` — **404** if unknown |
 | `POST` | `/api/checkpoint/:id/approve` | body `{ approvedBy }` → `{ ok, item, shortlist[] }` |
 | `POST` | `/api/checkpoint/:id/reject` | body `{ approvedBy }` → `{ ok, item, shortlist: [] }` |
@@ -343,18 +345,29 @@ The bar has **no close button**. It cannot be dismissed, minimised, or scrolled 
 
 ### 3.1 What the agent is DOING → Pipeline Stage Rail (region A)
 
-Six segments, fixed order, matching `runPipeline()` in `src/server.js`:
+**Seven** segments, in the order the server publishes on `GET /api/state` → `run.stages`. The
+frontend renders that list rather than this one; the table is what to expect, not the authority.
 
 | # | id | Label | Sub-label while active |
 |---|---|---|---|
 | 1 | `ingest` | `Ingest` | `Fetching connectors` |
 | 2 | `triage` | `Triage` | `Tier 1 → 2 → 3 cascade` |
 | 3 | `dedup` | `Dedup` | `Fellegi–Sunter, deterministic` |
-| 4 | `rank` | `Rank` | `Exponential TBE + Getis-Ord Gi*` |
-| 5 | `checkpoint` | `Checkpoint` | `Raising escalations` |
-| 6 | `ready` | `Ready` | `Awaiting human decisions` |
+| 4 | `observe` | `Observe` | `Writing append-only observations` |
+| 5 | `rank` | `Rank` | `Exponential TBE + Getis-Ord Gi*` |
+| 6 | `checkpoint` | `Checkpoint` | `Raising escalations` |
+| 7 | `persist` | `Persist` | `Writing the run's derived projections` |
 
-Rendering: 6 pill segments, `height: 22px`, joined by 8px connectors.
+Two changes from the original six, both for the same reason — a rail row must correspond to
+something the server actually does, and only to that:
+
+- **`observe` and `persist` were added.** They are real stages, the server already tagged incidents
+  with `detail.stage: "observe"`, and the rail silently dropped those because the id was not in its
+  list. A degraded stage nobody can see on the stage rail is the fail feed's job undone.
+- **`ready` was removed.** It was a *state* wearing a stage's clothes on a rail whose other rows are
+  real. "Ready" is now the rail's sub-line when the pass is done, which is where a state belongs.
+
+Rendering: 7 pill segments, `height: 22px`, joined by 8px connectors.
 
 - **done**: filled `--ok` at 22% with a `--ok` 1px border, `✓` glyph, label `--ink-2`.
 - **active**: filled `--accent` at 18%, 1px `--accent` border, label `--ink` 600, plus a 2px
@@ -364,20 +377,31 @@ Rendering: 6 pill segments, `height: 22px`, joined by 8px connectors.
   failed but the rail continues — matching the server's "a stage that throws never kills the run".
 
 The rail's `aria-label` is `Pipeline progress`, and it contains a visually-hidden
-`aria-live="polite"` element that announces exactly one string per transition:
-`Stage 3 of 6: Dedup.`
+`aria-live="polite"` element that announces exactly one string per transition, built from the
+server's own stage list rather than a hard-coded count: `Running dedup · 00:12 · 2 of 7 stages
+complete.`
 
-**Honesty rule for progress — non-negotiable.** `POST /api/run` is a single blocking call that
-returns only at the end; it does not stream stage boundaries. Therefore:
+**Honesty rule for progress — non-negotiable.** The rule has not changed; which branch of it applies
+has. `POST /api/run` used to be a single blocking call that returned only at the end and streamed
+nothing, so the rail took the second branch below and said so out loud. It now answers **202** and
+the server reports stage progress on `GET /api/state` → `run`, so the rail takes the **first**
+branch:
 
-- **If** the backend exposes stage progress (an SSE endpoint `GET /api/run/stream` emitting
-  `{stage, status}`, or `stats.currentStage` in `/api/state`) → drive the rail from it.
-- **If it does not** → the UI shows exactly two states: all six segments in a `running` style with
-  the shared sub-label **`Running — per-stage detail not reported by the server`**, and an elapsed
-  timer (`00:12`). Then, on response, all six flip to `done` (or to `failed` for any stage that
-  produced a `degraded-source` incident during this run window).
+- **If** the backend exposes stage progress (`run.stage`, `run.stagesCompleted` and `run.stages` in
+  `/api/state`) → drive the rail from it. **This is the live case.** `run.stage` is set by the
+  orchestrator at the point each stage actually begins; `run.stages` is the server's own stage list,
+  so the rail renders what the pipeline runs rather than a list the frontend hard-coded. A null
+  `run.stage` means the server has not reported one yet and the rail lights **nothing** rather than
+  everything.
+- **If it does not** (an older server, or `run: null` because this process has not started a pass) →
+  the UI shows exactly two states: all segments in a `running` style with the shared sub-label
+  **`Running — per-stage detail not reported by the server`**, and an elapsed timer (`00:12`).
 - **The UI must never animate a fake stage-by-stage march on a timer.** A judge who reads the code
   will find it. A dashboard that lies about its own progress fails the criterion it is competing on.
+- The elapsed timer is **server-measured** (`run.elapsedMs`) extended by the client's own elapsed
+  time since that poll — not a client-side count from the click. Reading `Date.parse(run.startedAt)`
+  against the browser clock would show a stopwatch counting backwards on any machine whose clock is
+  a few seconds ahead of the server's.
 
 Recommended (small, safe) backend hook so the honest path is the rich one — set
 `store.stats.currentStage = <id>` at the top of each stage block in `runPipeline()` and clear it in
@@ -857,8 +881,9 @@ empty rank list is not good news and must not be styled as such.
 |---|---|
 | `/api/state` fetch fails | Full-width banner under the command bar, `--critical-bg`, 2px `--critical` top border: **`Cannot reach the Signal Zero API.`** ` Showing the last state received {relative}. Retrying in {n}s.` + `Retry now` button. All regions dim to 70% opacity and get `aria-busy="true"`. **Data on screen is never cleared** — stale-and-labelled beats blank. |
 | `/api/state` returns malformed JSON | Same banner, message `The API returned a response this console could not read.` + a `<details>` with the first 400 chars of the body. |
-| `POST /api/run` 500 | Toast (`--critical`, 10s, dismissible) with the server's `error` string + a `LOCAL` activity row. Stage rail marks the failed stage. |
-| `POST /api/run` 409 | Toast (`--warn`, 5s): `A pipeline pass is already running.` Button enters in-flight state. |
+| `POST /api/run` 500 | Toast (`--critical`, 10s, dismissible) with the problem document's `detail` + a `LOCAL` activity row. This is a failure to **start**; a failure *during* a pass arrives as `run.status: "error"` and the rail names the stage it died in. |
+| `POST /api/run` 409 | Toast (`--warn`, 5s): `A pipeline pass is already running.` The problem document names the `runId` holding the slot; log it. The button is held by the server-reported `run.status`, so two tabs agree. |
+| Any error response | Read the message from the RFC 9457 problem document — `detail`, falling back to `title`. Branch on `type`, never on the prose. |
 | `GET /api/settlement/:id` 404 | Evidence panel error block: `No record for "{id}".` ` The ranking may have been rebuilt since this row was drawn.` + `Refresh state` button. |
 | Checkpoint POST failure | Handled in-dialog only (§5.3). **Never a toast** — a decision failure must not be dismissible. |
 | Tile / map failures | §4.6 ladder. In-map banner, not a toast. |

@@ -36,14 +36,91 @@ describe('migration runner', () => {
     assert.ok(r.skipped.includes('002_store_shape_parity'));
   });
 
-  it('recorded 001 as adopted, not as executed by the runner', async () => {
-    // 001 was applied to this database by hand before the runner existed. The
-    // ledger must say so rather than claiming the runner ran it.
-    const { rows } = await query('SELECT applied_by FROM schema_migrations WHERE version = $1', [
-      '001_initial'
-    ]);
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].applied_by, 'adopted');
+  it('records every migration with a provenance the ledger can defend', async () => {
+    // WHAT THIS DOES NOT ASSERT, AND WHY.
+    //
+    // This test used to read `applied_by` for 001 out of whatever database it
+    // happened to be pointed at and assert 'adopted'. That passed on exactly one
+    // machine — the laptop whose sz-pg had 001 applied by hand before the runner
+    // existed — and it FAILED everywhere else, including CI, whose own workflow
+    // comment says the service container "starts genuinely empty, so 001 is RUN
+    // here rather than adopted". The assertion was pinned to an accident of one
+    // database's history rather than to a behaviour of this code, so it went red
+    // on every fresh checkout and on every `drop schema public cascade`.
+    //
+    // `applied_by` is legitimately EITHER value depending on how the database
+    // came to exist, so the environment-independent invariant is: every real
+    // migration is recorded exactly once, with a provenance from the known set.
+    // The 'adopted' path itself is proved below, by CONSTRUCTING the hand-applied
+    // database instead of hoping to be run against one.
+    const versions = (await loadMigrations(MIGRATIONS_DIR)).map((m) => m.version);
+    for (const version of versions) {
+      const { rows } = await query('SELECT applied_by FROM schema_migrations WHERE version = $1', [
+        version
+      ]);
+      assert.equal(rows.length, 1, `${version} must be recorded exactly once`);
+      assert.ok(
+        ['runner', 'adopted'].includes(rows[0].applied_by),
+        `${version} has provenance "${rows[0].applied_by}", which is neither runner nor adopted`
+      );
+    }
+  });
+
+  it('adopts a hand-applied database instead of claiming the runner built it', async () => {
+    // The adoption window opens only when `schema_migrations` does not exist
+    // while the objects a migration creates already do. That state cannot be
+    // reached in a database this runner has already migrated, so the test builds
+    // it: a throwaway database, 001 applied BY HAND exactly as a human would
+    // have, then the runner let loose on it.
+    //
+    // CREATE DATABASE cannot run inside a transaction, which is why it goes
+    // through query() rather than withTransaction().
+    const scratchDb = `sz_adopt_test_${tag}`;
+    const originalUrl = process.env.DATABASE_URL;
+    const scratchUrl = new URL(originalUrl);
+    scratchUrl.pathname = `/${scratchDb}`;
+
+    const [first] = await loadMigrations(MIGRATIONS_DIR);
+    await query(`DROP DATABASE IF EXISTS ${scratchDb}`);
+    await query(`CREATE DATABASE ${scratchDb}`);
+
+    try {
+      // Point the process-wide pool at the throwaway database. closePool() first
+      // so the next getPool() reads the new URL rather than reusing the old one.
+      await closePool();
+      process.env.DATABASE_URL = scratchUrl.toString();
+
+      // The hand application. No ledger row is written — that is the whole point:
+      // this is what a database somebody else built looks like.
+      await query(first.sql);
+      const { rows: pre } = await query("SELECT to_regclass('public.schema_migrations') AS reg");
+      assert.equal(pre[0].reg, null, 'the hand-applied database must have no ledger yet');
+
+      const r = await migrate({ logger: null });
+      assert.ok(
+        r.adopted.includes(first.version),
+        `${first.version} should have been adopted, got applied=${r.applied} adopted=${r.adopted}`
+      );
+
+      const { rows } = await query(
+        'SELECT applied_by, checksum FROM schema_migrations WHERE version = $1',
+        [first.version]
+      );
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].applied_by, 'adopted');
+      // The checksum is pinned at adoption time — "we did not run this file, but
+      // we know which bytes we adopted".
+      assert.equal(rows[0].checksum, first.checksum);
+
+      // The window is one run wide. A second run must not adopt anything else.
+      const again = await migrate({ logger: null });
+      assert.equal(again.applied.length, 0);
+      assert.equal(again.adopted.length, 0, 'the adoption window must close with the run');
+    } finally {
+      await closePool();
+      process.env.DATABASE_URL = originalUrl;
+      await query(`DROP DATABASE IF EXISTS ${scratchDb}`);
+    }
   });
 
   it('every migration file parses and none contains transaction control', async () => {

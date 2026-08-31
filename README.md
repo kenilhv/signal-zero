@@ -194,10 +194,13 @@ genuine branch for a live demo — it does not push a fabricated string.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/state` | Ranked settlements, checkpoint queue, incidents, source health, stats |
-| `POST /api/run` | Trigger one full pipeline pass |
-| `POST /api/checkpoint/:id/approve` | Body `{approvedBy}` — **400 if missing or blank** |
-| `POST /api/checkpoint/:id/reject` | Body `{approvedBy}` |
+| `GET /api/state` | Ranked settlements, checkpoint queue, one page of the incident feed, in-flight run progress, source health, persistence mode, stats |
+| `POST /api/run` | **Start** one pipeline pass. Answers **202 Accepted** with a run id; progress is read from `GET /api/state` → `run`. Accepts `Idempotency-Key` |
+| `GET /api/incidents` | The unbounded fail feed, keyset-paged `(at DESC, id DESC)`. Default 100, max 500 |
+| `GET /api/checkpoint/:id` | One held item plus its append-only decision log |
+| `GET /problems` | The RFC 9457 problem-type registry — every error `type` URI this API emits, and it dereferences |
+| `POST /api/checkpoint/:id/approve` | Body `{approvedBy}` — **400 if missing or blank**. Accepts `Idempotency-Key` |
+| `POST /api/checkpoint/:id/reject` | Body `{approvedBy}`. Accepts `Idempotency-Key` |
 | `GET /api/settlement/:id` | Full evidence trail: reports, cluster, score breakdown |
 | `POST /api/demo/fail/:kind` | Trigger a real failure branch (`source` \| `ambiguous` \| `coldstart`) |
 

@@ -104,7 +104,7 @@ export const PROBLEMS = Object.freeze({
     doc:
       'A human already signed this item. The decision log is append-only and a ' +
       "second caller may not overwrite the first human's signature. To make a " +
-      'repeated submission safe, send an `Idempotency-Key` header: the same key ' +
+      'repeated submission safe, supply an `Idempotency-Key` header: the same key ' +
       'with the same body replays the original response instead of colliding.'
   },
   'checkpoint-status-immutable': {
@@ -210,6 +210,23 @@ export const PROBLEMS = Object.freeze({
     doc:
       'No handler matches that method and path under /api. Non-API paths fall ' +
       'through to the static frontend instead and are not JSON.'
+  },
+  'database-unavailable': {
+    status: 503,
+    code: 'DATABASE_UNAVAILABLE',
+    title: 'The observation store is unreachable',
+    doc:
+      'Postgres could not be reached, so this request was REFUSED rather than ' +
+      'answered from a stale or partial picture. It is a 503 and not a 500 on ' +
+      'purpose: 500 says "this server has a bug", which sends an operator to read ' +
+      'code, while 503 says "a dependency this server needs is down", which is the ' +
+      'true statement and the one a client may retry on. ' +
+      'src/db/pool.js raises DatabaseUnavailableError with exactly this `code` and ' +
+      'a `statusCode` of 503; before this entry existed both were dropped on the ' +
+      'floor and every database outage was reported as an internal error. ' +
+      'The silence clock is derived from the observations table, so a read that ' +
+      'cannot reach it has no honest answer to give — hard rule 4 applies to the ' +
+      'transport as much as to the column.'
   },
   'internal-error': {
     status: 500,
@@ -332,6 +349,11 @@ export function problemFromError(err, req = null) {
  * these; the mapping lives here so the pipeline stays unaware of HTTP.
  */
 const CODE_TO_SLUG = Object.freeze({
+  // src/db/pool.js:DatabaseUnavailableError. Not a CheckpointError, but it
+  // reaches the handler the same way — as a thrown object carrying a `code` —
+  // and mapping it here keeps src/db/ unaware of HTTP, which is the same
+  // separation the checkpoint codes below exist to preserve.
+  DATABASE_UNAVAILABLE: 'database-unavailable',
   APPROVER_REQUIRED: 'approver-required',
   DISPATCH_FIELD_FORBIDDEN: 'dispatch-field-forbidden',
   NOT_FOUND: 'checkpoint-not-found',

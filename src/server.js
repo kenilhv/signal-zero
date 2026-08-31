@@ -230,6 +230,35 @@ function observationsFromReports(reports, knownSettlementIds) {
 }
 
 /**
+ * ENTER A STAGE: record it, then hand the event loop back.
+ *
+ * The `markStage` half is the progress report. The `setImmediate` half is what
+ * makes POST /api/run's 202 mean anything.
+ *
+ * A pipeline pass is a long chain of awaits, and an await on an already-resolved
+ * promise is a MICROTASK — the runtime drains every one of them before it will
+ * look at a socket again. Against the in-memory store nothing in a pass performs
+ * real I/O, so the entire pass ran as one uninterrupted microtask chain and the
+ * server answered NOTHING for its duration: not GET /api/state, not the progress
+ * this change exists to publish, not even GET /api/health. An asynchronous run
+ * that starves the event loop is a synchronous run with a different status code.
+ *
+ * (This was not hypothetical and it was not caught by reading the code. Two
+ * concurrent POSTs to /api/run both came back 202 with different run ids, because
+ * the first pass had run to completion before the runtime read the second request
+ * off the socket. Against Postgres the same code interleaved correctly, because
+ * real I/O yields on its own — which is exactly the kind of backend-dependent
+ * behaviour that would have shipped and then only shown up under load.)
+ *
+ * One yield per stage boundary is enough: it bounds the starvation window at one
+ * stage rather than one pass, and it costs a single event-loop turn seven times.
+ */
+async function enterStage(name) {
+  runProgress.markStage(name);
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
  * Claim the single-flight slot and mint a run id. SYNCHRONOUS on purpose.
  *
  * POST /api/run has to decide between 202 and 409 before it answers, and two
@@ -276,7 +305,7 @@ async function executePipeline(runId) {
     // of them is interpolated from elapsed time or advanced by a timer: the
     // frontend's stage rail is allowed to name a stage only because the server
     // observed it starting.
-    runProgress.markStage('ingest');
+    await enterStage('ingest');
     let reports = store.reports;
     const ingestFn = pick(stageModules.ingest, [
       'ingest',
@@ -298,7 +327,7 @@ async function executePipeline(runId) {
     store.reports = Array.isArray(reports) ? reports : [];
 
     // --- 2. TRIAGE -------------------------------------------------------
-    runProgress.markStage('triage');
+    await enterStage('triage');
     const triageFn = pick(stageModules.triage, [
       'triage',
       'runTriage',
@@ -321,7 +350,7 @@ async function executePipeline(runId) {
 
     // --- 3. DEDUP --------------------------------------------------------
     // Deterministic Fellegi-Sunter. No LLM here, by design.
-    runProgress.markStage('dedup');
+    await enterStage('dedup');
     let ambiguousPairs = [];
     const dedupFn = pick(stageModules.dedup, [
       'dedup',
@@ -368,7 +397,7 @@ async function executePipeline(runId) {
     // A failure here degrades the pass rather than killing it: rank still runs,
     // it just runs on whatever history was already durable. That is a worse
     // answer, not a wrong one, and it goes on the fail feed.
-    runProgress.markStage('observe');
+    await enterStage('observe');
     let observationHistory = [];
     let observationsWritten = 0;
     try {
@@ -403,7 +432,7 @@ async function executePipeline(runId) {
 
     // --- 4. RANK ---------------------------------------------------------
     // Exponential TBE baseline + Getis-Ord Gi*. Deterministic and auditable.
-    runProgress.markStage('rank');
+    await enterStage('rank');
     const rankFn = pick(stageModules.rank, ['rank', 'runRank', 'rankSettlements', 'score']);
     if (rankFn) {
       try {
@@ -438,7 +467,7 @@ async function executePipeline(runId) {
     // Deliberately not pick(): pick() falls back to a module's default export,
     // which here is rank() itself, and calling that as a predicate would be
     // silently truthy for every row.
-    runProgress.markStage('checkpoint');
+    await enterStage('checkpoint');
     const escalationGate =
       typeof stageModules.rank?.qualifiesForEscalation === 'function'
         ? stageModules.rank.qualifiesForEscalation
@@ -507,7 +536,7 @@ async function executePipeline(runId) {
     // A failure here is reported and does NOT abort the pass — the observations
     // (the facts) are already durable at this point, and they are the half that
     // cannot be recomputed.
-    runProgress.markStage('persist');
+    await enterStage('persist');
     try {
       await repos.reports.replaceForRun(runId, store.reports);
       await repos.clusters.replaceForRun(runId, store.clusters);
@@ -1088,7 +1117,7 @@ function sourcesArray() {
  * same 202 with the same run id instead of racing the single-flight guard into a
  * 409. See src/http/idempotency.js — Stripe's convention, not a standard.
  */
-app.post('/api/run', idempotency(), (req, res, next) => {
+app.post('/api/run', idempotency(), (_req, res, next) => {
   try {
     const accepted = startPipelineRun({ trigger: 'api' });
     if (!accepted.accepted) {

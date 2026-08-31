@@ -103,7 +103,11 @@ export function beginRun(runId, { trigger = 'api' } = {}) {
 export function markStage(stage) {
   if (!current) return;
   if (!RUN_STAGES.includes(stage)) return;
-  if (current.stage && current.stage !== stage && !current.stagesCompleted.includes(current.stage)) {
+  if (
+    current.stage &&
+    current.stage !== stage &&
+    !current.stagesCompleted.includes(current.stage)
+  ) {
     current.stagesCompleted.push(current.stage);
   }
   current.stage = stage;

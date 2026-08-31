@@ -11,36 +11,36 @@
 import {
   $,
   $$,
-  h,
-  clear,
-  fmtHours,
-  fmtZ,
-  fmtNum,
-  fmtInt,
-  fmtCount,
-  fmtLambda,
-  relTime,
-  clockTime,
-  localFull,
-  silStop,
-  SIL_BANDS,
-  anomalyOf,
   ANOMALY,
-  INCIDENT_KINDS,
-  statusOf,
-  coverageChip,
-  safeLocal,
-  fetchJson,
-  silenceKind,
-  KINDS,
-  groupByKind,
-  STOPPED_AFTER_HOURS,
+  anomalyOf,
+  clear,
+  clockTime,
   countUp,
-  staggerStep,
+  coverageChip,
+  fetchJson,
+  fmtCount,
   fmtDuration,
   fmtDurationWords,
+  fmtHours,
+  fmtInt,
+  fmtLambda,
+  fmtNum,
   fmtPeople,
-  reducedMotion
+  fmtZ,
+  groupByKind,
+  h,
+  INCIDENT_KINDS,
+  KINDS,
+  localFull,
+  reducedMotion,
+  relTime,
+  SIL_BANDS,
+  STOPPED_AFTER_HOURS,
+  safeLocal,
+  silenceKind,
+  silStop,
+  staggerStep,
+  statusOf
 } from './lib.js';
 import { createMapController } from './map.js';
 
@@ -117,15 +117,7 @@ const STAGE_LABELS = {
   checkpoint: 'Checkpoint',
   persist: 'Persist'
 };
-const DEFAULT_STAGE_IDS = [
-  'ingest',
-  'triage',
-  'dedup',
-  'observe',
-  'rank',
-  'checkpoint',
-  'persist'
-];
+const DEFAULT_STAGE_IDS = ['ingest', 'triage', 'dedup', 'observe', 'rank', 'checkpoint', 'persist'];
 
 /**
  * The stages to render. The SERVER publishes its own list on `run.stages`, so

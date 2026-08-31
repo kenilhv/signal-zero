@@ -12,21 +12,39 @@ openapi: 3.1.0
 # smoothed over, because a later phase changes this API and a diff against an
 # idealised before-picture would measure nothing.
 #
+# WHAT CHANGED IN 2.0.0, AND WHY THE VERSION IS MAJOR
+#
+#   * Every error response is now an RFC 9457 problem document
+#     (application/problem+json). The three incompatible error envelopes below are
+#     gone. This BREAKS any client reading `body.error`, which is why the version
+#     is 2.0.0 rather than 1.1.0 - see components/schemas/Problem.
+#   * POST /api/run answers 202 Accepted with a run id instead of 200 with a
+#     finished pass. A ~45s unit of work does not belong inside a request.
+#     Progress is read from GET /api/state -> `run`.
+#   * POST /api/run and both checkpoint decision routes accept an
+#     `Idempotency-Key` header (Stripe's convention, NOT an IETF standard - see
+#     the parameter description).
+#   * GET /api/incidents is documented, and the feed is KEYSET-PAGED. The
+#     200-item in-memory ring buffer that silently discarded the 201st failure is
+#     gone; the feed is unbounded and the READ is what is bounded.
+#
 # Known inconsistencies documented in place (search for "INCONSISTENCY"):
 #   1. There is no uniform success envelope. Every route except GET /api/state
 #      returns a top-level `ok: true`; GET /api/state - the single largest and
-#      most-used response - has no `ok` field at all.
-#   2. There is no uniform error envelope either. Most errors are
-#      {ok:false, error}. Checkpoint errors add a machine-readable `code`.
-#      POST /api/run's 409 adds `reportCount` and `durationMs` and no `code`.
+#      most-used response - has no `ok` field at all. STILL TRUE for the success
+#      path; the ERROR path is now uniform (see 2).
+#   2. RESOLVED in 2.0.0. There were three error envelopes - {ok,error},
+#      {ok,error,code}, and POST /api/run's 409 with reportCount and durationMs.
+#      All of them are now one RFC 9457 problem document with a stable `type`
+#      URI, so a client branches on `type` rather than regexing English prose.
 #   3. GET /api/state's `settlements` array does not contain settlements. It
-#      contains RANKED ROWS (store.ranked), whose identity field is
-#      `settlementId`, not `id`.
+#      contains RANKED ROWS, whose identity field is `settlementId`, not `id`.
 #   4. The same entity is keyed two ways: the gazetteer record uses `id`, the
 #      ranked row uses `settlementId`. GET /api/settlement/{id} returns both,
 #      side by side, in one response.
-#   5. `stats` is projected differently in POST /api/run, GET /api/state and
-#      store.stats - each drops fields the others carry.
+#   5. `stats` is projected differently in GET /api/state and in the runs table -
+#      each drops fields the other carries. POST /api/run no longer returns stats
+#      at all, because it no longer waits for the pass that produces them.
 #   6. Simulating a demo failure that CANNOT be simulated still answers 200 with
 #      ok:true, carrying an incident that reports the simulation failed.
 #
@@ -40,7 +58,7 @@ openapi: 3.1.0
 
 info:
   title: Signal Zero API
-  version: 1.0.0
+  version: 2.0.0
   summary: Ranks Nepali settlements by anomalously long SILENCE, not by report volume.
   description: |
     Signal Zero ingests reports about a disaster, resolves them to settlements,
@@ -65,8 +83,41 @@ info:
        `lastReportAt` both mean NO DATA REACHED US. Neither means "confirmed
        silent".
 
-    All state is in-memory (`src/store.js`) and is rebuilt by each pipeline pass,
-    except the incident feed and human checkpoint decisions.
+    ## Where the state lives
+
+    Observations, runs, checkpoint items, the append-only approvals log and the
+    incident feed are in **Postgres**. `GET /api/state` reports which store is
+    live under `persistence`, and a deployment with no reachable database serves
+    from memory and **says so** (`persistence.durable: false`) rather than
+    quietly reporting a silence clock that resets on every restart.
+
+    ## Error handling
+
+    Every error is an **RFC 9457 problem document**
+    (https://www.rfc-editor.org/rfc/rfc9457.html, which obsoletes RFC 7807),
+    served as `application/problem+json`. Branch on `type`, not on `detail`:
+    `type` is the stable identity, the prose is not. Each `type` URI
+    dereferences - `GET /problems` lists them and `GET /problems/{slug}` explains
+    one.
+
+    ## Long-running work
+
+    `POST /api/run` returns **202 Accepted** with a run id and does not wait for
+    the pass. Poll `GET /api/state` and read `run`.
+
+    ## Repeated submissions
+
+    `POST /api/run` and both checkpoint decision routes accept an
+    `Idempotency-Key` header, following **Stripe's convention** - which is an
+    industry convention and *not* a standard. The IETF draft
+    `draft-ietf-httpapi-idempotency-key-header` is **expired and archived**;
+    describing this as RFC-compliant would be wrong.
+
+    ## Paging
+
+    The incident feed is unbounded and **keyset-paged** on `(at DESC, id DESC)`.
+    Default page 100, maximum 500. An out-of-range `limit` is refused with 400
+    rather than silently clamped.
   license:
     name: MIT
     identifier: MIT
@@ -91,6 +142,11 @@ tags:
     description: The human decision gate. Nothing becomes actionable here anonymously.
   - name: demo
     description: Live-demo failure injection. Produces real incidents, not fake ones.
+  - name: problems
+    description: |
+      The RFC 9457 problem type registry. Every `type` URI an error response can
+      carry resolves here, generated from the same table the errors are built
+      from - so the documentation cannot drift from what it documents.
 
 paths:
   /api/health:
@@ -102,6 +158,12 @@ paths:
         Always answers 200 while the process is up. This is a liveness probe, not
         a readiness probe: it reports `ok: true` even when every pipeline stage
         failed to load and the ranked list is empty.
+
+        There is deliberately **no 4XX documented here**. Redocly's
+        `operation-4xx-response` rule warns about that, and the warning is accepted
+        rather than silenced: this route takes no input it can reject, and adding a
+        4XX to the description that the implementation cannot produce would make
+        the contract lie in order to make a linter quiet.
       responses:
         '200':
           description: The process is serving.
@@ -148,92 +210,175 @@ paths:
         `settlementId`. The gazetteer record (with `id`) is only reachable through
         `GET /api/settlement/{id}`.
 
-        **INCONSISTENCY (5):** `stats` here is a re-projection of `store.stats`
-        that drops `rankedCount`, which `POST /api/run` computed and stored.
+        **INCONSISTENCY (5):** `stats` here is a re-projection that drops
+        `rankedCount`, which the pipeline computed and stored in the runs table.
 
         Before the first pipeline pass completes, `settlements` is `[]` and
         `stats.lastRunAt` is null — an empty ranking is the honest state at t=0,
         not an error.
+
+        ## Two different "what is happening" fields, and they are not the same
+
+        `run` describes the pass **this process** started, and is null when this
+        process has not started one. `stats.lastRunAt` comes from the runs table
+        and survives a restart. A freshly restarted process legitimately reports
+        `run: null` next to a populated `stats.lastRunAt`; collapsing the two
+        would make a restart look like a cold start.
+
+        ## The incident feed here is ONE PAGE
+
+        Newest first, `incidentPageSize` rows of it (default 200, override with
+        `?incidentLimit=`, maximum 500). `incidentTotal` counts every incident in
+        the table and legitimately exceeds the page — that is exactly the property
+        the old 200-item ring buffer destroyed, because back then 200 *was* all of
+        them. `incidentCursor` continues the walk through `GET /api/incidents`.
+      parameters:
+        - name: incidentLimit
+          in: query
+          required: false
+          description: |
+            How many incidents to carry inline. Default 200, maximum 500. An
+            out-of-range value is **refused with 400**, not clamped: a caller who
+            asked for 5000 and silently received 500 cannot tell a truncated page
+            from a complete feed.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
       responses:
         '200':
-          description: Current in-memory state.
+          description: Current state.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/StateResponse'
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
 
   /api/run:
     post:
       tags: [pipeline]
       operationId: runPipeline
-      summary: Run one full pipeline pass (ingest → triage → dedup → rank → checkpoint).
+      summary: START one pipeline pass. Answers 202 Accepted; the pass proceeds.
       description: |
-        Runs the pipeline synchronously and answers when it finishes. Takes **no
-        request body** — any JSON sent is parsed and ignored.
+        **This route does not wait for the pass.** A pass takes roughly 45 seconds
+        — ingest makes one upstream call per settlement and tier-3 triage makes
+        real model calls — and a unit of work that long does not belong inside an
+        HTTP request. Holding a connection open across that window exposes it to
+        the client's timeout, an intermediary's idle timeout and a deploy, and
+        tells the caller nothing until it either finishes or does not.
+
+        So this route does the one thing it can do synchronously — claim the
+        single-flight slot and mint a run id — and answers **202 Accepted**. 202 is
+        a claim with content: the request was accepted, processing has NOT
+        completed, and the response says where to watch.
+
+        ## Reading the progress
+
+        `GET /api/state` → `run`. The `runId` there matches the id returned here
+        and the `runs` table row. `run.status` moves from `running` to `done` or
+        `error`; `run.stage` names the stage in progress and is reported by the
+        orchestrator at the point each stage begins — it is never interpolated
+        from elapsed time. `run.stage` is null when the server has not reported
+        one yet, which means exactly that and is not a guess.
 
         A stage that throws never kills the pass: the failure is written to the
         incident feed as a `degraded-source` incident and the pass continues with
-        whatever data survived. So **200 with `ok: true` does not mean every stage
-        succeeded** — check `GET /api/state` → `incidents` for degradation.
+        whatever data survived. So **202 does not mean every stage will succeed**
+        — read `incidents` and `run.stagesCompleted`.
 
-        Concurrency is a single process-wide boolean. A second call while a pass
-        is in flight is refused with 409.
+        Takes **no meaningful request body**; any JSON sent is parsed and ignored,
+        though it does participate in the `Idempotency-Key` fingerprint.
+
+        ## Concurrency
+
+        The pipeline is single-flight per process. A second call while a pass is in
+        flight is refused with 409 and the problem document **names the run already
+        running**, so the caller can follow that one instead. The boot pass counts:
+        a client that posts here the instant the port opens can legitimately be
+        refused by the pass the server started for itself.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '200':
-          description: The pass completed (possibly with degraded stages — see the incident feed).
+        '202':
+          description: |
+            The pass was accepted and is running. `Location` points at where its
+            result appears.
+          headers:
+            Location:
+              description: Where the result of the accepted work becomes visible.
+              schema:
+                type: string
+                const: /api/state
+            Idempotency-Key:
+              $ref: '#/components/headers/IdempotencyKeyEcho'
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
           content:
             application/json:
               schema:
-                type: object
-                required: [ok, reportCount, clusterCount, durationMs]
-                properties:
-                  ok:
-                    type: boolean
-                    const: true
-                  reportCount:
-                    type: integer
-                    minimum: 0
-                  clusterCount:
-                    type: integer
-                    minimum: 0
-                  durationMs:
-                    type: integer
-                    minimum: 0
-                example: { ok: true, reportCount: 61, clusterCount: 23, durationMs: 4182 }
+                $ref: '#/components/schemas/RunAccepted'
+        '400':
+          description: |
+            The `Idempotency-Key` header was present but unusable, or the body was
+            not readable JSON.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              examples:
+                bad-key:
+                  value:
+                    type: /problems/invalid-idempotency-key
+                    title: Idempotency-Key header is not usable
+                    status: 400
+                    detail: Idempotency-Key must be at most 255 characters; received 512.
+                    instance: /api/run
+                    code: INVALID_IDEMPOTENCY_KEY
+                    maximumLength: 255
         '409':
           description: |
-            A pass is already running. **INCONSISTENCY (2):** this error body is
-            not the `{ok, error, code}` shape the checkpoint routes use — it has
-            no `code`, and it carries `reportCount` and `durationMs` (always 0)
-            that no other error body has, because the handler forwards
-            `runPipeline()`'s own return value verbatim.
+            Either a pass is already running, or the `Idempotency-Key` was already
+            used for a different request. The two are distinguished by `type`.
           content:
-            application/json:
+            application/problem+json:
               schema:
-                type: object
-                required: [ok, error, reportCount, durationMs]
-                properties:
-                  ok:
-                    type: boolean
-                    const: false
-                  error:
-                    type: string
-                  reportCount:
-                    type: integer
-                  durationMs:
-                    type: integer
-                    description: Always 0 on this response; the running pass's duration is not reported.
-                example:
-                  ok: false
-                  error: A pipeline pass is already running.
-                  reportCount: 61
-                  durationMs: 0
+                $ref: '#/components/schemas/Problem'
+              examples:
+                already-running:
+                  summary: Single-flight. The problem document names the run holding the slot.
+                  value:
+                    type: /problems/pipeline-run-in-flight
+                    title: A pipeline pass is already running
+                    status: 409
+                    detail: A pipeline pass is already running. Read its progress from GET /api/state ("run").
+                    instance: /api/run
+                    code: RUN_IN_FLIGHT
+                    runId: run-mfa2j8k-1a-0
+                    startedAt: '2026-08-30T04:12:03.140Z'
+                    stage: triage
+                key-reuse:
+                  summary: Same key, different body.
+                  value:
+                    type: /problems/idempotency-key-reuse
+                    title: Idempotency-Key was already used with a different request
+                    status: 409
+                    detail: Idempotency-Key "run-9f21" was already used for a different request (POST /api/run). A key identifies one request; use a fresh key for a different one.
+                    instance: /api/run
+                    code: IDEMPOTENCY_KEY_REUSE
+                    idempotencyKey: run-9f21
+                    firstSeenAt: '2026-08-30T04:11:02.008Z'
         '500':
-          description: The pipeline threw outside a stage's own catch. Also written to the incident feed.
+          description: |
+            The pass could not be STARTED. A failure *during* a pass never appears
+            here — by then the caller holds a 202 and a run id, so the failure is
+            reported on the incident feed and on `GET /api/state` →
+            `run.status: "error"` with `run.stage` naming where it died.
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/BareError'
+                $ref: '#/components/schemas/Problem'
 
   /api/checkpoint/{id}/approve:
     post:
@@ -254,8 +399,23 @@ paths:
         Rule 2 is enforced here in application code, not in the UI, and is
         mirrored by a NOT NULL + non-blank CHECK on `approvals.approved_by` in the
         database.
+
+        ## Repeat this submission safely
+
+        This route writes a named human's signature into an **append-only decision
+        log**. A double-clicked button or a client retry after a timeout must not
+        put a second row in that log, and must not come back as a 409 the caller
+        cannot distinguish from "somebody else got here first".
+
+        Send an `Idempotency-Key`: the same key with the same body **replays the
+        first response** (`Idempotent-Replayed: true`) instead of re-executing.
+        Without a key the checkpoint's own guard still holds — a repeat is refused
+        with 409 `ALREADY_DECIDED` and the log keeps exactly one signature — so the
+        key upgrades that refusal to a replay rather than being the only thing
+        preventing a duplicate.
       parameters:
         - $ref: '#/components/parameters/CheckpointId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         description: |
@@ -283,13 +443,13 @@ paths:
           $ref: '#/components/responses/CheckpointImmutable'
         '500':
           description: |
-            Any non-`CheckpointError` thrown while deciding. The handler maps
-            `err.statusCode` when present and falls back to 500 otherwise, so this
-            body carries `code: "ERROR"` when the thrown error had no `code`.
+            Anything thrown while deciding that is not a mapped failure. The
+            document carries the message verbatim on `detail` and the failure is
+            also written to the incident feed.
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/CheckpointError'
+                $ref: '#/components/schemas/Problem'
 
   /api/checkpoint/{id}/reject:
     post:
@@ -307,8 +467,13 @@ paths:
 
         On rejection `shortlist` is always `[]` — the server only builds a
         shortlist when `item.status === 'approved'`.
+
+        `Idempotency-Key` applies here exactly as it does to `/approve`: a
+        rejection is a signed decision on record, so a repeated submission must
+        not append a second one.
       parameters:
         - $ref: '#/components/parameters/CheckpointId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -330,9 +495,9 @@ paths:
         '500':
           description: Unmapped error while deciding.
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/CheckpointError'
+                $ref: '#/components/schemas/Problem'
 
   /api/settlement/{id}:
     get:
@@ -370,10 +535,15 @@ paths:
         '404':
           description: No gazetteer record AND no ranked row for this id.
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/BareError'
-              example: { ok: false, error: 'No settlement "np-rasuwa-nowhere".' }
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: /problems/settlement-not-found
+                title: No such settlement
+                status: 404
+                detail: No settlement "np-rasuwa-nowhere".
+                instance: /api/settlement/np-rasuwa-nowhere
 
   /api/demo/fail/{kind}:
     post:
@@ -516,22 +686,305 @@ paths:
         '400':
           description: Unrecognised failure kind.
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: '#/components/schemas/BareError'
+                $ref: '#/components/schemas/Problem'
               example:
-                ok: false
-                error: Unknown failure kind "meltdown". Use source | ambiguous | coldstart.
+                type: /problems/unknown-failure-kind
+                title: Unknown demo failure kind
+                status: 400
+                detail: Unknown failure kind "meltdown". Use source | ambiguous | coldstart.
+                instance: /api/demo/fail/meltdown
+                code: UNKNOWN_FAILURE_KIND
+                kind: meltdown
+                supported: [source, ambiguous, coldstart]
         '500':
           description: The simulator itself threw.
           content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/incidents:
+    get:
+      tags: [state]
+      operationId: listIncidents
+      summary: The fail feed, keyset-paged. Unbounded, and nothing truncates it.
+      description: |
+        ## Why this is paged rather than capped
+
+        The store used to keep a **200-item in-memory ring buffer** and silently
+        discard the 201st failure — on the one surface whose entire job is making
+        failure visible. That buffer is gone. The `incidents` table is append-only,
+        nothing deletes from it, and there is no maximum.
+
+        Which is precisely why the READ is bounded. Bounding a read is honest as
+        long as the response says how much it bounded, which is what `pageSize`,
+        `total`, `hasMore` and `nextCursor` are for. Bounding the write was data
+        loss wearing a memory-limit costume.
+
+        ## Keyset, not offset
+
+        Ordered `(at DESC, id DESC)`, matching the `incidents_feed_idx` index
+        exactly, so a page is a range scan on the head of the index. The cursor is
+        the `(at, id)` of the last row returned and the predicate is a **row
+        comparison**, which is what makes ties correct — and a feed written in
+        tight loops during a failure cascade produces ties constantly, so that is
+        the normal case, not the edge case.
+
+        OFFSET would be wrong here for the usual reason and a specific one: this
+        feed grows **at the head** while a human is reading it, so one incident
+        arriving mid-read shifts every later page by one and page 2 re-shows a row
+        from page 1. A keyset cursor is anchored to a row, so it cannot drift.
+
+        ## Stopping
+
+        A null `nextCursor` means the end. Stop there; do not guess at an offset.
+      parameters:
+        - $ref: '#/components/parameters/IncidentLimit'
+        - $ref: '#/components/parameters/IncidentCursor'
+        - name: kind
+          in: query
+          required: false
+          description: |
+            Filter to one incident kind. `total` is then the count of THAT kind, so
+            the number next to a filtered page describes the same filtered feed.
+            An unrecognised kind is not an error — it yields an empty page,
+            because the set of kinds is open and a new one must not 400 old clients.
+          schema:
+            type: string
+            examples: [degraded-source, llm-fallback, cold-start, heal, agent-refusal]
+      responses:
+        '200':
+          description: One page of the feed.
+          content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BareError'
+                $ref: '#/components/schemas/IncidentPage'
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+
+  /api/checkpoint/{id}:
+    get:
+      tags: [checkpoint]
+      operationId: getCheckpointItem
+      summary: One held item plus its APPEND-ONLY decision log.
+      description: |
+        `item.status` is a **projection** of `decisions`; this route returns both so
+        the projection can be checked against the log it claims to summarise. An
+        audit trail nobody can read is not an audit trail either.
+
+        `decisions` is oldest first and is never rewritten — `checkpoint_items` has
+        a mutable status column, `approvals` does not, and that separation is the
+        point. `approved_by` on every row is NOT NULL and non-blank at the database
+        level, so an anonymous decision cannot exist here even if application code
+        is bypassed.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      responses:
+        '200':
+          description: The item and every decision recorded against it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, item, decisions]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  item:
+                    $ref: '#/components/schemas/CheckpointItem'
+                  decisions:
+                    type: array
+                    description: |
+                      Append-only, oldest first. Empty while the item is pending.
+                      Exactly one row per decision — a repeated submission carrying
+                      the same `Idempotency-Key` does not add a second.
+                    items:
+                      $ref: '#/components/schemas/Approval'
+        '404':
+          $ref: '#/components/responses/CheckpointNotFound'
+
+  /problems:
+    get:
+      tags: [problems]
+      operationId: listProblemTypes
+      summary: Every problem `type` this API can return.
+      description: |
+        RFC 9457 §3.1.1 says a `type` URI SHOULD resolve to human-readable
+        documentation when dereferenced. Most implementations emit one that 404s,
+        which turns a SHOULD into decoration. These resolve.
+
+        The list is generated from the same table the error responses are built
+        from, so the documentation cannot drift from the thing it documents.
+
+        No 4XX, for the same reason as `GET /api/health`: this route takes no input
+        it can reject. See that route's note.
+      responses:
+        '200':
+          description: The registry.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, problems]
+                properties:
+                  ok: { type: boolean, const: true }
+                  specification:
+                    type: string
+                    const: https://www.rfc-editor.org/rfc/rfc9457.html
+                  mediaType:
+                    type: string
+                    const: application/problem+json
+                  note: { type: string }
+                  problems:
+                    type: array
+                    items:
+                      type: object
+                      required: [type, status, title]
+                      properties:
+                        type: { type: string, examples: ['/problems/approver-required'] }
+                        status: { type: integer }
+                        title: { type: string }
+                        code: { type: [string, 'null'] }
+
+  /problems/{slug}:
+    get:
+      tags: [problems]
+      operationId: getProblemType
+      summary: What one problem `type` means.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: The last segment of a `type` URI, e.g. `approver-required`.
+          schema:
+            type: string
+            examples: [approver-required, invalid-page-size, idempotency-key-reuse]
+      responses:
+        '200':
+          description: The registry entry.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, type, status, title, description]
+                properties:
+                  ok: { type: boolean, const: true }
+                  type: { type: string }
+                  status: { type: integer }
+                  title: { type: string }
+                  code: { type: [string, 'null'] }
+                  description:
+                    type: string
+                    description: What this failure means and what the caller can do about it.
+                  specification:
+                    type: string
+                    const: https://www.rfc-editor.org/rfc/rfc9457.html
+        '404':
+          description: No such problem type is registered.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 
 components:
 
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Makes ONE submission safe to repeat.
+
+        **This is an industry convention led by Stripe
+        (https://docs.stripe.com/api/idempotent_requests), NOT a standard.** There
+        is an IETF draft, `draft-ietf-httpapi-idempotency-key-header`
+        (https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/),
+        and it is **expired and archived**; it never became an RFC. Do not describe
+        this behaviour as RFC-compliant or standards-compliant. (Contrast RFC 9457
+        below, which *is* a published standard and is cited by number.)
+
+        ## Semantics
+
+        | Request | Result |
+        |---|---|
+        | header absent | the route runs normally — keys are optional |
+        | key, first time | the route runs; status and body are stored |
+        | key, same method/path/body again | the **stored response is replayed byte for byte**, with `Idempotent-Replayed: true`; the route does not run |
+        | key, different method/path/body | **409** `/problems/idempotency-key-reuse` |
+        | key, first request still in flight | **409** `/problems/idempotency-key-in-flight` |
+
+        "Same request" compares method, path and a **canonical** JSON encoding of
+        the body with object keys sorted, so `{"a":1,"b":2}` and `{"b":2,"a":1}`
+        are one request rather than two.
+
+        **5xx responses are not stored.** Recovering from a server error is the
+        reason to retry with a key, and a cached 500 would make a transient failure
+        permanent. The record is dropped so a retry executes.
+
+        ## The limitation, stated rather than discovered
+
+        Records live **in this process's memory**, not in Postgres. A restart
+        forgets every key, and two processes behind a load balancer do not share
+        them — so a retry after a restart RE-EXECUTES. Making it durable needs a
+        table and a numbered migration; that is the obvious next step and it is not
+        pretended to be done.
+
+        The blast radius of forgetting a key is bounded, which is why in-memory was
+        acceptable rather than blocking: a forgotten approve key re-executes and
+        meets `ALREADY_DECIDED`, so the append-only log is still **not**
+        double-written. The key layer is defence in depth over guards that already
+        exist.
+
+        Retention is at least 24 hours; at most 1000 records are held, and only
+        COMPLETE records are ever evicted — evicting an in-flight one would let its
+        twin execute concurrently, which is the single outcome this exists to stop.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[\x20-\x7e]+$'
+        description: A single line of printable ASCII. A UUIDv4 is the usual choice.
+        examples: ['b5f0d3f2-6a1c-4f0e-9a44-9b6f2e7c1d8a']
+
+    IncidentLimit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        Page size. **Default 100, maximum 500.**
+
+        An out-of-range or non-integer value is **refused with 400**
+        `/problems/invalid-page-size`, not clamped. A caller that asked for 5000,
+        received 500 and was told nothing cannot distinguish a clamped page from a
+        complete feed, and will conclude the deployment holds 500 incidents. The
+        applied value and both bounds come back on every page as `pageSize`,
+        `pageSizeDefault` and `pageSizeMaximum`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+
+    IncidentCursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        The `nextCursor` from the previous page. **Opaque by contract — do not
+        construct one.** It is `<ISO 8601 instant>|<row id>`, which is readable in a
+        log line on purpose (an opaque base64 cursor is one more thing to decode at
+        3am), but the format is not a promise.
+
+        An unreadable cursor is refused with 400 rather than treated as "no
+        cursor", which would silently re-serve page one forever.
+      schema:
+        type: string
+        examples: ['2026-08-30T04:15:33.204Z|inc-mfa2k1x-7']
+
     CheckpointId:
       name: id
       in: path
@@ -544,12 +997,68 @@ components:
         type: string
         examples: ['esc-mfa2j8k-0', 'amb-mfa2kf2-3']
 
+  headers:
+    IdempotencyKeyEcho:
+      description: The `Idempotency-Key` this response was recorded under. Echoed back verbatim.
+      schema:
+        type: string
+    IdempotentReplayed:
+      description: |
+        `true` when this response is a REPLAY of a stored one and the route did not
+        run; `false` when the route ran and this response was stored. Absent when no
+        `Idempotency-Key` was sent.
+      schema:
+        type: string
+        enum: ['true', 'false']
+
   responses:
+
+    ProblemBadRequest:
+      description: |
+        The request could not be answered as written — an out-of-range page size, an
+        unreadable cursor, an unusable `Idempotency-Key`, or a body that is not
+        JSON. `type` says which.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            page-size:
+              value:
+                type: /problems/invalid-page-size
+                title: Page size is out of range
+                status: 400
+                detail: '"limit" must be between 1 and 500; received 5000. The request is refused rather than silently reduced, so the page you receive is never smaller than the page you asked for without being told.'
+                instance: /api/incidents?limit=5000
+                code: INVALID_PAGE_SIZE
+                parameter: limit
+                requested: 5000
+                maximum: 500
+                default: 100
+            cursor:
+              value:
+                type: /problems/invalid-cursor
+                title: Pagination cursor is not readable
+                status: 400
+                detail: '"cursor" must be the "nextCursor" value from a previous page, of the form "<ISO-8601 instant>|<id>".'
+                instance: /api/incidents?cursor=garbage
+                code: INVALID_CURSOR
+                parameter: cursor
+                received: garbage
 
     DecisionAccepted:
       description: |
         The decision was recorded. On approval `shortlist` holds the jurisdictions
         to inform; on rejection it is always `[]`.
+
+        When an `Idempotency-Key` was sent, a repeat of the identical submission
+        answers with these same bytes and `Idempotent-Replayed: true` — and the
+        append-only approvals log still holds exactly one signature.
+      headers:
+        Idempotency-Key:
+          $ref: '#/components/headers/IdempotencyKeyEcho'
+        Idempotent-Replayed:
+          $ref: '#/components/headers/IdempotentReplayed'
       content:
         application/json:
           schema:
@@ -622,14 +1131,17 @@ components:
         whitespace-only (`"   "` fails). The item is untouched: nothing in Signal
         Zero becomes actionable anonymously.
       content:
-        application/json:
+        application/problem+json:
           schema:
-            $ref: '#/components/schemas/CheckpointError'
+            $ref: '#/components/schemas/Problem'
           examples:
             blank-approver:
               value:
-                ok: false
-                error: A named human approver is required. Nothing in Signal Zero becomes actionable anonymously.
+                type: /problems/approver-required
+                title: A named human approver is required
+                status: 400
+                detail: A named human approver is required. Nothing in Signal Zero becomes actionable anonymously.
+                instance: /api/checkpoint/esc-mfa2j8k-0/approve
                 code: APPROVER_REQUIRED
 
     CheckpointNotFound:
@@ -638,12 +1150,15 @@ components:
         **before** the lookup, so a blank approver against a nonexistent id answers
         400, not 404.
       content:
-        application/json:
+        application/problem+json:
           schema:
-            $ref: '#/components/schemas/CheckpointError'
+            $ref: '#/components/schemas/Problem'
           example:
-            ok: false
-            error: No checkpoint item with id "esc-nope-0".
+            type: /problems/checkpoint-not-found
+            title: No such checkpoint item
+            status: 404
+            detail: No checkpoint item with id "esc-nope-0".
+            instance: /api/checkpoint/esc-nope-0/approve
             code: NOT_FOUND
 
     CheckpointImmutable:
@@ -661,20 +1176,30 @@ components:
           rather than going through `approve()`/`reject()`. Not reachable from
           these two routes today; it surfaces here if internal code bypasses the
           decision functions.
+        * `IDEMPOTENCY_KEY_REUSE` / `IDEMPOTENCY_KEY_IN_FLIGHT` — the
+          `Idempotency-Key` header was already used for a different request, or its
+          first request has not answered yet. Neither reaches the decision logic.
       content:
-        application/json:
+        application/problem+json:
           schema:
-            $ref: '#/components/schemas/CheckpointError'
+            $ref: '#/components/schemas/Problem'
           examples:
             already-decided:
+              summary: The detail NAMES the first approver, so a second signature cannot silently replace it.
               value:
-                ok: false
-                error: Checkpoint item "esc-mfa2j8k-0" was already approved by Sunita Gurung, Rasuwa DDMC.
+                type: /problems/checkpoint-already-decided
+                title: Checkpoint item was already decided
+                status: 409
+                detail: Checkpoint item "esc-mfa2j8k-0" was already approved by Sunita Gurung, Rasuwa DDMC.
+                instance: /api/checkpoint/esc-mfa2j8k-0/approve
                 code: ALREADY_DECIDED
             status-immutable:
               value:
-                ok: false
-                error: CheckpointItem.status is read-only. Use approve(id, approvedBy) or reject(id, approvedBy).
+                type: /problems/checkpoint-status-immutable
+                title: Checkpoint status is read-only
+                status: 409
+                detail: CheckpointItem.status is read-only. Use approve(id, approvedBy) or reject(id, approvedBy).
+                instance: /api/checkpoint/esc-mfa2j8k-0/approve
                 code: STATUS_IMMUTABLE
 
   schemas:
@@ -683,50 +1208,98 @@ components:
     # Errors
     # -----------------------------------------------------------------------
 
-    BareError:
+    Problem:
       type: object
-      title: BareError
+      title: Problem
       description: |
-        The error body used by every route except the checkpoint decisions and the
-        `POST /api/run` 409. **INCONSISTENCY (2):** it has no `code`, so a client
-        that wants to branch on the failure has only the human-readable `error`
-        string to match on.
+        **RFC 9457 Problem Details** — https://www.rfc-editor.org/rfc/rfc9457.html,
+        which **obsoletes RFC 7807**. Served as `application/problem+json`.
 
-        Also returned by the catch-all: any unmatched `/api/*` path answers 404
-        with `{"ok":false,"error":"No route GET /api/whatever"}`. Unmatched
-        non-API paths fall through to the static frontend instead and are not JSON.
-      required: [ok, error]
-      properties:
-        ok:
-          type: boolean
-          const: false
-        error:
-          type: string
-      examples:
-        - { ok: false, error: 'No route GET /api/settlements' }
+        THE ONE ERROR SHAPE IN THIS API. Before 2.0.0 there were three
+        (`{ok,error}`, `{ok,error,code}`, and a `POST /api/run` 409 carrying
+        `reportCount` and `durationMs`), so a client that wanted to branch on a
+        failure had only a human-readable English sentence to match on — which made
+        every error message load-bearing prose that could not be reworded without
+        breaking somebody.
 
-    CheckpointError:
-      type: object
-      title: CheckpointError
-      description: |
-        The richer error body used only by the checkpoint decision routes. Adds a
-        stable machine-readable `code`. When the thrown error is not a
-        `CheckpointError`, the handler still emits this shape with `code: "ERROR"`.
-      required: [ok, error, code]
+        **Branch on `type`.** It is the stable machine-readable identity. `title`
+        and `detail` are prose and may change. Every `type` here dereferences: `GET
+        /problems` lists them, `GET /problems/{slug}` explains one.
+
+        `type` values are **relative URI references**, resolved by the client
+        against the server origin. Signal Zero has no public domain to hang
+        absolute URIs off, and inventing one would produce a URI that resolves to
+        nothing on purpose.
+
+        Extension members are permitted by RFC 9457 §3.2 and several problems carry
+        them (`runId`, `maximum`, `requested`, `idempotencyKey`, …). They are
+        documented on the responses that emit them.
+      required: [type, title, status, detail]
+      # RFC 9457 section 3.2: a problem document MAY carry extension members, and
+      # several here do - `runId` on a run conflict, `requested`/`maximum` on a page
+      # size, `idempotencyKey` on a key reuse. A closed schema would make the spec
+      # contradict the RFC it claims to implement. The members that matter are
+      # documented on the responses that emit them.
+      additionalProperties: true
+      unevaluatedProperties: true
       properties:
-        ok:
-          type: boolean
-          const: false
-        error:
+        type:
           type: string
+          format: uri-reference
+          description: |
+            Stable identity of the failure. Dereferences to documentation at the
+            same path.
+          examples:
+            - /problems/approver-required
+            - /problems/pipeline-run-in-flight
+            - /problems/invalid-page-size
+            - /problems/idempotency-key-reuse
+        title:
+          type: string
+          description: Short, human-readable summary of the problem TYPE. Does not change per occurrence.
+          examples: ['A named human approver is required']
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: |
+            The HTTP status code, duplicated for the benefit of clients that have
+            lost it. RFC 9457 §3.1.2: it is advisory and **must agree** with the
+            actual response status. A document that disagrees with its own response
+            is worse than no document, because a client will believe one of them.
+          examples: [400, 404, 409]
+        detail:
+          type: string
+          description: |
+            Human-readable explanation specific to THIS occurrence. Never a
+            substitute for a value the server does not know — a problem document
+            reports what failed, it does not guess at what the caller meant.
+        instance:
+          type: string
+          format: uri-reference
+          description: |
+            The request URL this occurred on. Carries no personal data, because no
+            route in this API takes any.
+          examples: ['/api/checkpoint/esc-mfa2j8k-0/approve']
         code:
           type: string
           description: |
-            `APPROVER_REQUIRED` (400) · `DISPATCH_FIELD_FORBIDDEN` (400, raised at
-            item-creation time inside the pipeline, not by these routes) ·
-            `NOT_FOUND` (404) · `ALREADY_DECIDED` (409) · `STATUS_IMMUTABLE` (409) ·
-            `ERROR` (500 fallback for an error carrying no code).
-          examples: [APPROVER_REQUIRED, NOT_FOUND, ALREADY_DECIDED, STATUS_IMMUTABLE, ERROR]
+            EXTENSION MEMBER, kept for one specific reason: the checkpoint errors
+            already carried these codes, thrown from `src/pipeline/checkpoint.js`
+            and asserted on by the eval suite at the unit level. Dropping them would
+            have forced a rename inside the pipeline to satisfy a change to the HTTP
+            layer. They are carried through, not invented. `type` is the identity to
+            prefer.
+          examples: [APPROVER_REQUIRED, ALREADY_DECIDED, RUN_IN_FLIGHT, INVALID_PAGE_SIZE]
+      examples:
+        - type: /problems/route-not-found
+          title: No such API route
+          status: 404
+          detail: No route GET /api/settlements
+          instance: /api/settlements
+          code: NO_ROUTE
+          method: GET
+          path: /api/settlements
 
     # -----------------------------------------------------------------------
     # Requests
@@ -761,7 +1334,21 @@ components:
       description: |
         **INCONSISTENCY (1):** no `ok` field, unlike every other response in this
         API.
-      required: [settlements, checkpoint, incidents, sources, harness, stats]
+      required:
+        [
+          settlements,
+          checkpoint,
+          incidents,
+          incidentTotal,
+          incidentPageSize,
+          incidentCursor,
+          incidentHasMore,
+          run,
+          sources,
+          persistence,
+          harness,
+          stats
+        ]
       properties:
         settlements:
           type: array
@@ -785,13 +1372,58 @@ components:
         incidents:
           type: array
           description: |
-            The fail feed, newest first. **Truncated at 200 entries** by
-            `addIncident` in src/store.js: the 201st-oldest incident is silently
-            discarded, on the one surface whose entire job is making failure
-            visible. Documented here because it is the current behaviour, not
-            because it is correct.
+            **ONE PAGE of the fail feed**, newest first — `incidentPageSize` rows
+            of it.
+
+            This used to be the WHOLE feed, truncated at 200 by an in-memory ring
+            buffer that silently discarded the 201st incident, on the one surface
+            whose entire job is making failure visible. That buffer is gone. The
+            table is append-only and unbounded; only this response is bounded, and
+            the three fields below say by how much.
           items:
             $ref: '#/components/schemas/Incident'
+        incidentTotal:
+          type: integer
+          minimum: 0
+          description: |
+            Every incident in the table, not just this page. It legitimately
+            exceeds `incidents.length` — which is exactly the property the ring
+            buffer destroyed, because back then 200 *was* all of them.
+          examples: [1487]
+        incidentPageSize:
+          type: integer
+          minimum: 1
+          maximum: 500
+          description: The page size this response applied. Default 200; set with `?incidentLimit=`.
+          examples: [200]
+        incidentCursor:
+          type: [string, 'null']
+          description: |
+            Continue the feed at `GET /api/incidents?cursor=…`. **Null means this
+            page is the whole feed** — so a client can tell "that is all of them"
+            from "there are more" without arithmetic.
+          examples: ['2026-08-30T04:15:33.204Z|inc-mfa2k1x-7']
+        incidentHasMore:
+          type: boolean
+          description: Whether anything follows this page. Redundant with `incidentCursor !== null`, and stated rather than inferred.
+        run:
+          oneOf:
+            - $ref: '#/components/schemas/RunProgress'
+            - type: 'null'
+          description: |
+            The pass **this process** started, or null.
+
+            NULL MEANS "THIS PROCESS HAS NOT STARTED A PASS" — it does **not** mean
+            "no pass has ever run". That question is answered by `stats.lastRunAt`,
+            which comes from the runs table and survives a restart. A freshly
+            restarted process legitimately reports `run: null` next to a populated
+            `stats.lastRunAt`, and collapsing the two into one field would make a
+            restart look like a cold start.
+
+            There is no table behind this, deliberately: a run marked `running` by a
+            process that has since died is not evidence of anything.
+        persistence:
+          $ref: '#/components/schemas/PersistenceState'
         sources:
           type: array
           description: |
@@ -858,6 +1490,250 @@ components:
             The same `HarnessSummary` object as the top-level `harness` key, or
             null. Duplicated in the payload, not referenced. Null before the first
             pass — again "no run yet", never "zero classifications".
+
+    PersistenceState:
+      type: object
+      title: PersistenceState
+      description: |
+        **WHICH STORE IS LIVE.** Hard rule 4 applied to the store itself: a client
+        must be able to tell a silence figure backed by a durable observation log
+        from one backed by a process that booted ten minutes ago.
+
+        A deployment with no reachable database still serves — an operator with no
+        database still needs the map, the fail feed and the checkpoint queue — but
+        it never claims durability it does not have.
+      required: [mode, durable, configured, reason]
+      properties:
+        mode:
+          type: string
+          enum: [postgres, memory]
+        durable:
+          type: boolean
+          description: |
+            False means the silence clock **restarts from zero on every process
+            restart**, so `silenceHours` is time since this process booted rather
+            than time since the last observation.
+        configured:
+          type: boolean
+          description: |
+            Distinguishes "no DATABASE_URL was set" (`false`) from "one was set and
+            could not be used" (`true`, with `error`). Different operator problems
+            with different fixes; collapsing them costs an hour at the wrong moment.
+        reason:
+          type: string
+          description: Plain-language statement of which mode this is and what it costs.
+        error:
+          type: [string, 'null']
+          description: Why a configured database could not be used. Null in postgres mode.
+        databaseUrl:
+          type: [string, 'null']
+          description: Redacted — the password is never in this payload.
+          examples: ['postgres://signalzero:***@localhost:5544/signalzero']
+        unpersistedIncidents:
+          type: integer
+          minimum: 0
+          description: |
+            Incidents this process minted and could **not** write down. Non-zero
+            means the fail feed itself is lossy, which is worth shouting about, so
+            it is counted and published rather than swallowed.
+
+    RunAccepted:
+      type: object
+      title: RunAccepted
+      description: The 202 body of `POST /api/run`. The pass has STARTED, not finished.
+      required: [ok, status, runId, startedAt, progressUrl]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        status:
+          type: string
+          const: accepted
+          description: |
+            Deliberately not `"ok"` or `"done"`. The pass is running; a word implying
+            otherwise here would be a claim the server is in no position to make.
+        runId:
+          type: string
+          description: |
+            Matches `run.runId` on `GET /api/state` and the `runs` table row. This is
+            the correlation id for the whole pass.
+          examples: ['run-mfa2j8k-1a-0']
+        startedAt:
+          type: string
+          format: date-time
+        progressUrl:
+          type: string
+          const: /api/state
+        note:
+          type: string
+          description: Plain-language instruction for following the pass.
+
+    RunProgress:
+      type: object
+      title: RunProgress
+      description: |
+        Live progress of the pass this process is running, published on
+        `GET /api/state` as `run`.
+
+        **Every field is observed, none is interpolated.** `stage` is set by the
+        orchestrator at the point each stage actually begins; it is never predicted
+        from elapsed time and never advanced by a timer. A null `stage` means the
+        server has not reported one yet, which is a fact rather than a gap to fill.
+      required: [runId, status, startedAt, stage, stagesCompleted, stages]
+      properties:
+        runId:
+          type: string
+          examples: ['run-mfa2j8k-1a-0']
+        status:
+          type: string
+          enum: [running, done, error]
+        trigger:
+          type: string
+          description: |
+            How the pass was started. `api` is `POST /api/run`; `direct` is the boot
+            pass the server runs for itself so the dashboard has data at t=0.
+          examples: [api, direct]
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Null while running.
+        durationMs:
+          type: [integer, 'null']
+          description: |
+            Measured by the pipeline's own clock. Null while running — `elapsedMs` is
+            the number to read then, and there are deliberately never two live
+            duration figures to pick between.
+        elapsedMs:
+          type: integer
+          minimum: 0
+          description: |
+            Present **only** while `status` is `running`. Server-measured, so a
+            client whose clock is a few seconds ahead does not render a stopwatch
+            counting backwards.
+        stage:
+          type: [string, 'null']
+          description: |
+            The stage in progress, or null between stages / before the first report.
+            Always one of `stages`.
+          examples: [ingest, triage, dedup, observe, rank, checkpoint, persist]
+        stagesCompleted:
+          type: array
+          description: |
+            Stages this pass has finished, in order. Only ever grows within one run,
+            and every entry is a member of `stages`.
+          items:
+            type: string
+        stages:
+          type: array
+          description: |
+            The full stage list **published by the server**, so a client renders what
+            the pipeline actually runs rather than a list it hard-coded. A rail row
+            the server does not run is a fabricated progress bar.
+          items:
+            type: string
+          examples:
+            - [ingest, triage, dedup, observe, rank, checkpoint, persist]
+        error:
+          type: [string, 'null']
+          description: |
+            Why the pass failed, or null. When set, `stage` is **left at whatever it
+            was** rather than cleared — which stage a pass died in is the most useful
+            fact about a failed run, and blanking it to keep the shape tidy would
+            throw it away.
+      examples:
+        - runId: run-mfa2j8k-1a-0
+          status: running
+          trigger: api
+          startedAt: '2026-08-30T04:12:03.140Z'
+          finishedAt: null
+          durationMs: null
+          elapsedMs: 21400
+          stage: rank
+          stagesCompleted: [ingest, triage, dedup, observe]
+          stages: [ingest, triage, dedup, observe, rank, checkpoint, persist]
+          error: null
+
+    IncidentPage:
+      type: object
+      title: IncidentPage
+      description: One keyset page of the fail feed, newest first.
+      required: [ok, incidents, nextCursor, hasMore, pageSize, total]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        incidents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Incident'
+        nextCursor:
+          type: [string, 'null']
+          description: |
+            Pass as `?cursor=` for the next page. **Null means the end** — stop
+            there rather than guessing at an offset.
+        hasMore:
+          type: boolean
+        pageSize:
+          type: integer
+          description: The page size that applied to this response.
+        pageSizeSource:
+          type: string
+          enum: [request, default]
+          description: |
+            Whether `pageSize` came from the request or from the default. A client
+            never has to infer the page size from how many rows it happened to get.
+        pageSizeDefault:
+          type: integer
+          const: 100
+        pageSizeMaximum:
+          type: integer
+          const: 500
+        total:
+          type: integer
+          minimum: 0
+          description: |
+            Count of the whole feed — or of the filtered feed when `kind` was given,
+            so the number next to a filtered page describes the same filtered feed.
+            It legitimately exceeds `pageSize`.
+
+    Approval:
+      type: object
+      title: Approval
+      description: |
+        One row of the **append-only decision log**. Never updated, never deleted:
+        an audit trail you can UPDATE is not an audit trail. `checkpoint_items.status`
+        is a projection of these rows, which is why `GET /api/checkpoint/{id}`
+        returns both — so the projection can be checked against the log.
+      required: [approvalId, itemId, decision, approvedBy, decidedAt]
+      properties:
+        approvalId:
+          type: integer
+          description: Database identity, monotonically increasing.
+        itemId:
+          type: string
+        decision:
+          type: string
+          enum: [approved, rejected]
+        approvedBy:
+          type: string
+          minLength: 1
+          description: |
+            **The named human.** NOT NULL with a non-blank CHECK at the database
+            level, so an anonymous decision cannot be written even if application
+            code is bypassed. The field is called `approvedBy` on a rejection too —
+            `decision` is what distinguishes the two outcomes.
+          examples: ['Sunita Gurung, Rasuwa DDMC']
+        decidedAt:
+          type: string
+          format: date-time
+        shortlist:
+          type: [array, 'null']
+          description: The jurisdiction shortlist as it stood at decision time, or null.
+          items:
+            $ref: '#/components/schemas/JurisdictionShortlistEntry'
 
     # -----------------------------------------------------------------------
     # Ranked settlement — the core object

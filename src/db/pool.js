@@ -24,8 +24,17 @@ const { Pool } = pg;
  * NOT the compose stack's database. docker-compose.yml brings up its OWN
  * postgres (host port 5545, "postgres:5432" on the compose network) and sets
  * DATABASE_URL explicitly for the app service, precisely so a compose run can
- * never write to the hand-migrated database on 5544. That one is empty on first
- * boot, so the runner applies 001 for real there rather than adopting it.
+ * never write to the hand-migrated database on 5544.
+ *
+ * That compose database is NOT migrated by the runner, and the distinction is
+ * worth stating because this comment previously claimed the opposite. Compose
+ * mounts ./db/migrations at /docker-entrypoint-initdb.d, so on a fresh volume
+ * the Postgres entrypoint executes 001 and 002 BEFORE the app ever connects.
+ * The app's runner then finds the objects already present and no ledger, opens
+ * its adoption window, and records 001 as 'adopted' — 002 lands as 'runner'
+ * only because its ALTER ... IF NOT EXISTS statements re-run as a no-op instead
+ * of raising a duplicate-object error. Verified against a `docker compose down
+ * -v && docker compose up` on 2026-08-31.
  */
 export const LOCAL_DATABASE_URL = 'postgres://signalzero:signalzero@localhost:5544/signalzero';
 
@@ -128,15 +137,49 @@ const CONNECTION_SQLSTATES = new Set([
   '57P03', // cannot_connect_now — server still starting
   '08006', // connection_failure
   '08001', // sqlclient_unable_to_establish_sqlconnection
-  '08004' // sqlserver_rejected_establishment_of_sqlconnection
+  '08004', // sqlserver_rejected_establishment_of_sqlconnection
+  '57P01', // admin_shutdown — the DBA (or `docker stop`) ended the backend
+  '57P02' // crash_shutdown — another backend crashed and took the cluster down
 ]);
+
+// ---------------------------------------------------------------------------
+// THE CODELESS FAILURES, WHICH ARE THE COMMON ONES
+// ---------------------------------------------------------------------------
+// The two sets above key off `err.code`, and that covers the case where the
+// database is ALREADY down when we go looking: connect() fails with ECONNREFUSED
+// and everything works.
+//
+// It does not cover the case that actually happens in production, which is the
+// database going away UNDER A LIVE POOL. node-postgres then rejects the in-flight
+// query with `Connection terminated unexpectedly` — an Error with NO `code`
+// property at all — and every check above misses it. Measured, not guessed:
+// `docker stop sz-pg` against an idle app gives ECONNREFUSED, and against an app
+// that has just run a pipeline pass (so the pool holds live backends) gives the
+// codeless message instead. Only the first of those was being recognised, so the
+// most common real outage was reported as `internal-error` / HTTP 500 — "this
+// server has a bug" — instead of 503 "the database is down".
+//
+// Matched by exact driver phrases rather than by a loose /connection/i, because
+// a broad pattern would swallow genuine application errors that merely mention
+// the word and relabel a bug as an outage. That is the same failure as coalescing
+// a NULL: it substitutes a comfortable explanation for an unknown one.
+const CONNECTION_MESSAGES = [
+  /timeout exceeded when trying to connect/i,
+  /connection terminated unexpectedly/i,
+  /connection terminated due to connection timeout/i,
+  /client has encountered a connection error and is not queryable/i,
+  /client was closed and is not queryable/i,
+  /terminating connection due to administrator command/i,
+  /the database system is (starting up|shutting down|in recovery mode)/i
+];
 
 /** Re-wrap driver-level connection failures with something a human can act on. */
 function asFriendlyError(err) {
+  const message = String(err?.message ?? '');
   const isConnection =
     CONNECTION_ERRNOS.has(err?.code) ||
     CONNECTION_SQLSTATES.has(err?.code) ||
-    /timeout exceeded when trying to connect/i.test(err?.message ?? '');
+    CONNECTION_MESSAGES.some((re) => re.test(message));
   if (!isConnection) return err;
   return new DatabaseUnavailableError(
     `Cannot reach Postgres at ${redactUrl(String(process.env.DATABASE_URL ?? ''))} ` +

@@ -96,6 +96,44 @@ describe('pool', () => {
   });
 });
 
+describe('pool: the database goes away UNDER a live connection', () => {
+  // THE OUTAGE SHAPE THE ERRNO LIST DOES NOT COVER.
+  //
+  // The ECONNREFUSED case below is the database being ALREADY down when we go
+  // looking. The commoner production case is the opposite order: the pool holds
+  // live backends and the database disappears underneath them. node-postgres then
+  // rejects the in-flight query with SQLSTATE 57P01, or — when the socket dies
+  // before any SQLSTATE arrives — with a bare `Connection terminated unexpectedly`
+  // that has NO `code` property at all. Neither was recognised, so the most common
+  // real outage was reported as an internal server error.
+  //
+  // `pg_terminate_backend(pg_backend_pid())` kills OUR OWN backend from inside the
+  // query, which reproduces that exactly: a real severed connection against the
+  // real database, deterministically, with no container to stop and no sleep to
+  // tune. It touches nothing but the connection it is running on.
+  it('a severed backend surfaces as DatabaseUnavailableError, not as a raw driver error', async () => {
+    await assert.rejects(
+      () => query('SELECT pg_terminate_backend(pg_backend_pid())'),
+      (err) => {
+        assert.ok(
+          err instanceof DatabaseUnavailableError,
+          `a severed connection must be reported as unavailable, got ${err.name}: ${err.message}`
+        );
+        assert.equal(err.code, 'DATABASE_UNAVAILABLE');
+        assert.equal(err.statusCode, 503, 'the HTTP layer maps this to 503, not 500');
+        assert.match(err.message, /Cannot reach Postgres at/);
+        assert.doesNotMatch(err.message, /signalzero:signalzero/, 'password must be redacted');
+        return true;
+      }
+    );
+
+    // The pool discards the dead connection and the NEXT query works. A pool that
+    // handed the corpse back out would turn one outage into a permanent one.
+    const { rows } = await query('SELECT 1 AS ok');
+    assert.equal(rows[0].ok, 1);
+  });
+});
+
 // Runs last and in its own describe because it deliberately points the pool at a
 // dead port. node --test gives each FILE its own process, and this is the final
 // test in the file, so no other test inherits the poisoned pool.

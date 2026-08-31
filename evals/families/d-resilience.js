@@ -590,16 +590,53 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
       });
 
       if (server.healthy) {
+        // The boot pass owns the single-flight slot for its first few hundred
+        // milliseconds and the server now answers requests while it runs, so wait
+        // for the slot rather than racing it - see waitForIdle in evals/lib/server.js.
+        await server.waitForIdle();
         const run = await server.post('/api/run', {});
         const state = await server.waitForState({ timeoutMs: 90000 });
         const payload = state.json || {};
 
+        // UPDATED FOR THE ASYNC RUN. POST /api/run no longer blocks for the
+        // length of the pass: it claims the single-flight slot, answers 202
+        // Accepted with a run id, and the pass proceeds. So the status this case
+        // asserts is 202, not 200 — and the SECOND half of the assertion is
+        // unchanged and is what carries the family's actual claim: a full ranking
+        // is still produced with the harness dead. `waitForState` polls
+        // GET /api/state, which is where progress now lives.
         suite.check({
           id: 'D12.2',
-          name: 'a pipeline pass against a dead harness still returns HTTP 200 and still produces a full ranking',
-          pass: run.status === 200 && (payload.settlements || []).length > 0,
+          name: 'a pipeline pass against a dead harness is still ACCEPTED (HTTP 202 + a run id) and still produces a full ranking',
+          pass:
+            run.status === 202 &&
+            typeof run.json?.runId === 'string' &&
+            run.json.runId.length > 0 &&
+            (payload.settlements || []).length > 0,
           severity: 'critical',
-          evidence: { runStatus: run.status, ranked: (payload.settlements || []).length }
+          evidence: {
+            runStatus: run.status,
+            runId: run.json?.runId ?? null,
+            ranked: (payload.settlements || []).length
+          }
+        });
+
+        // The run id the 202 handed back must be the one GET /api/state reports,
+        // or the caller holds an id it cannot follow - which would make the async
+        // contract worse than the blocking call it replaced.
+        const runView = payload.run || {};
+        suite.check({
+          id: 'D12.2b',
+          name: 'the run id returned by the 202 is the run GET /api/state reports progress for, and every stage it claims to have finished is a stage the server actually runs',
+          pass:
+            runView.runId === run.json?.runId &&
+            ['running', 'done', 'error'].includes(runView.status) &&
+            Array.isArray(runView.stages) &&
+            runView.stages.length > 0 &&
+            Array.isArray(runView.stagesCompleted) &&
+            runView.stagesCompleted.every((st) => runView.stages.includes(st)),
+          severity: 'major',
+          evidence: { returnedRunId: run.json?.runId ?? null, run: runView }
         });
 
         const harnessIncidents = (payload.incidents || []).filter((i) =>
@@ -666,16 +703,95 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
           evidence: { statuses, crashed, healthAfter: stillUp.status }
         });
 
+        // NEW, AND THE REASON THIS FAMILY WAS TOUCHED. D13.1 asserts only that a
+        // hostile request gets SOME status code back rather than killing the
+        // process. That was the whole error contract this suite checked, which is
+        // why three mutually inconsistent error bodies survived in the API for as
+        // long as they did. This case asserts the contract a client consumes: one
+        // media type, one shape, and a `type` URI that is the stable
+        // machine-readable identity so the English is free to change.
+        //
+        // https://www.rfc-editor.org/rfc/rfc9457.html - which obsoletes RFC 7807.
+        //
+        // The path-traversal probe is skipped on purpose: it is not an /api route,
+        // so it falls through to the static frontend and is correctly not JSON.
+        const malformed = [];
+        for (const [label, fn] of hostile) {
+          if (label === 'path traversal') continue;
+          const res = await fn();
+          if (res.status < 400) continue;
+          const d = res.json;
+          const bad = [];
+          if (!/^application\/problem\+json/.test(res.contentType || '')) {
+            bad.push(`content-type ${res.contentType || 'none'}`);
+          }
+          if (!d || typeof d !== 'object') {
+            bad.push('body is not a JSON object');
+          } else {
+            if (typeof d.type !== 'string' || !d.type.startsWith('/problems/')) {
+              bad.push(`type ${JSON.stringify(d.type)}`);
+            }
+            if (typeof d.title !== 'string' || !d.title) bad.push('title missing');
+            if (typeof d.detail !== 'string' || !d.detail) bad.push('detail missing');
+            // RFC 9457 section 3.1.2: `status` is advisory and must agree with the
+            // HTTP status. A document that disagrees with its own response is
+            // worse than no document, because a client will believe one of them.
+            if (d.status !== res.status) bad.push(`status ${d.status} != HTTP ${res.status}`);
+          }
+          if (bad.length) malformed.push({ label, status: res.status, problems: bad });
+        }
+        suite.check({
+          id: 'D13.2',
+          name: 'every hostile request is answered with a well-formed RFC 9457 problem document - application/problem+json, a /problems/ type URI, and a `status` member that agrees with the HTTP status',
+          pass: malformed.length === 0,
+          severity: 'major',
+          evidence: { malformed, checked: hostile.length - 1 }
+        });
+
+        // RFC 9457 section 3.1.1 says the `type` URI SHOULD resolve to
+        // human-readable documentation. Most implementations emit one that 404s,
+        // which turns a SHOULD into decoration. These resolve, and this is the
+        // case that stops them quietly ceasing to.
+        const anyProblem = await server.get('/api/definitely-not-a-route');
+        const typeDoc = anyProblem.json?.type
+          ? await server.get(anyProblem.json.type)
+          : { status: 0, json: null };
+        suite.check({
+          id: 'D13.3',
+          name: 'the `type` URI in a problem document dereferences to documentation for that problem, rather than being a URI that resolves to nothing',
+          pass:
+            typeDoc.status === 200 &&
+            typeDoc.json?.type === anyProblem.json?.type &&
+            typeof typeDoc.json?.description === 'string' &&
+            typeDoc.json.description.length > 0,
+          severity: 'minor',
+          evidence: {
+            type: anyProblem.json?.type ?? null,
+            docStatus: typeDoc.status,
+            doc: typeDoc.json
+          }
+        });
+
         // --- D14 concurrency ---------------------------------------------------
+        await server.waitForIdle();
         const [a, b] = await Promise.all([
           server.post('/api/run', {}),
           server.post('/api/run', {})
         ]);
         const codes = [a.status, b.status].sort();
+        // UPDATED FOR THE ASYNC RUN: the accepted request now answers 202, not
+        // 200. The single-flight property under test is unchanged, and the
+        // refusal is now an RFC 9457 problem document that NAMES the run already
+        // in flight - which the old {ok:false,error} body could not do.
+        const refused = [a, b].find((r) => r.status === 409);
         suite.check({
           id: 'D14.1',
-          name: 'two concurrent pipeline runs do not interleave: one runs, the other is refused with HTTP 409',
-          pass: codes[0] === 200 && codes[1] === 409,
+          name: 'two concurrent pipeline runs do not interleave: one is accepted (202), the other is refused (409) with a problem document naming the run already in flight',
+          pass:
+            codes[0] === 202 &&
+            codes[1] === 409 &&
+            refused?.json?.type === '/problems/pipeline-run-in-flight' &&
+            typeof refused?.json?.runId === 'string',
           severity: 'major',
           evidence: { statuses: [a.status, b.status], bodies: [a.json, b.json] }
         });

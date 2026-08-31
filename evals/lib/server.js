@@ -83,6 +83,31 @@ export async function startServer({ port, env = {}, bootTimeoutMs = 45000 } = {}
     async post(p, body, opts = {}) {
       return request('POST', `${base}${p}`, body, opts);
     },
+    /**
+     * Wait until NO pipeline pass is in flight.
+     *
+     * Required now that POST /api/run is asynchronous AND the pass yields the
+     * event loop at every stage boundary: the server answers requests DURING a
+     * pass, including the boot pass it starts for itself. A scenario that POSTs
+     * /api/run the instant /api/health goes green is therefore racing the boot
+     * pass and gets a correct 409 for it. That refusal is the single-flight guard
+     * working; it is not the thing those scenarios are measuring, so they wait
+     * for the slot instead of asserting on whoever happened to win it.
+     *
+     * (Before the async change this race was invisible rather than absent: the
+     * blocking run held the whole event loop, so the request was not read off the
+     * socket until the pass was over.)
+     */
+    async waitForIdle({ timeoutMs = 90000 } = {}) {
+      const end = Date.now() + timeoutMs;
+      while (Date.now() < end) {
+        const res = await request('GET', `${base}/api/state`);
+        const run = res.json?.run;
+        if (!run || run.status !== 'running') return res;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      return null;
+    },
     /** Wait until the pipeline has produced ranked output, or give up. */
     async waitForState({ timeoutMs = 60000 } = {}) {
       const end = Date.now() + timeoutMs;

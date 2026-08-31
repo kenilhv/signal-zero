@@ -19,9 +19,9 @@ was skipped). Human output goes to stdout; a machine-readable report lands at
 
 <!-- BEGIN GENERATED RESULTS -- edit scripts/sync-eval-readme.mjs, not this block -->
 
-<!-- generated 2026-08-31T04:02:36.202Z from evals/report/latest.json -->
+<!-- generated 2026-08-31T08:31:47.035Z from evals/report/latest.json -->
 
-**157 checks across 4 families** — 157 passed, 0 failed (0 critical), 0 skipped. Wall clock 191.2s on Node v24.18.0 / win32.
+**168 checks across 4 families** — 168 passed, 0 failed (0 critical), 0 skipped. Wall clock 181.1s on Node v24.18.0 / win32.
 
 TrueForge reachable during this run: **yes** (nebius/signal-zero-triage).
 
@@ -29,8 +29,8 @@ TrueForge reachable during this run: **yes** (nebius/signal-zero-triage).
 |---|---|---|---|
 | A. golden-set classification | 22/22 | 0 | 0 |
 | B. deterministic-stage properties | 37/37 | 0 | 0 |
-| C. guardrails / adversarial | 34/34 | 0 | 0 |
-| D. harness-level resilience | 64/64 | 0 | 0 |
+| C. guardrails / adversarial | 37/37 | 0 | 0 |
+| D. harness-level resilience | 72/72 | 0 | 0 |
 
 ### What tier 3 is actually worth
 
@@ -301,12 +301,14 @@ inside the block record.
 prior and still clamped, and cold starts are announced in the fail feed rather than passed over.
 
 **D12–D14 — the real server.** The app is booted as a child process with TrueForge pointed at a dead
-port. It boots, `POST /api/run` returns 200, a full ranking is produced, the dead harness is named
-in a visible incident, the harness is **never described as "live" when it executed nothing**, and
-the process is still answering afterwards. Then seven malformed/hostile requests (broken JSON,
-120-deep nesting, path traversal, unknown routes) are answered with status codes rather than a
-crash, two concurrent pipeline runs resolve to 200 + 409, and the served payload is still
-structurally intact and free of dispatch-shaped fields.
+port. It boots, `POST /api/run` is **accepted with 202 and a run id**, that run id is the one
+`GET /api/state` reports progress for, a full ranking is produced, the dead harness is named in a
+visible incident, the harness is **never described as "live" when it executed nothing**, and the
+process is still answering afterwards. Then seven malformed/hostile requests (broken JSON, 120-deep
+nesting, path traversal, unknown routes) are answered with status codes rather than a crash — and
+each answer is a **well-formed RFC 9457 problem document** whose `type` URI dereferences to its own
+documentation. Two concurrent pipeline runs resolve to **202 + 409**, the 409 naming the run already
+in flight, and the served payload is still structurally intact and free of dispatch-shaped fields.
 
 **D15 — the real container.** `docker stop tforge`, verify honest degradation against the actual
 outage, `docker start tforge`, verify TrueForge answers `/api/v1/models` with the registered model
