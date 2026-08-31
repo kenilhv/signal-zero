@@ -88,8 +88,10 @@ export async function runFamilyA({ trueforgeUrl, harnessReachable }) {
       byId.has('g18') && // a different flood elsewhere in Nepal
       byId.has('g19') && // a different flood in a different country
       byId.has('g20') && // wholly unrelated story
-      byId.has('g22') && byId.has('g23') && // genuinely ambiguous, UNRESOLVED is correct
-      byId.has('g24') && byId.has('g25') && // cold start - place not in the gazetteer
+      byId.has('g22') &&
+      byId.has('g23') && // genuinely ambiguous, UNRESOLVED is correct
+      byId.has('g24') &&
+      byId.has('g25') && // cold start - place not in the gazetteer
       golden.cases.some((c) => /transliteration/i.test(c.hard)) &&
       golden.cases.some((c) => /diacritic/i.test(c.hard)),
     severity: 'critical',
@@ -187,7 +189,10 @@ export async function runFamilyA({ trueforgeUrl, harnessReachable }) {
           tier3Cases: tier3.map((r) => r.id),
           executedByHarness: byHarness.length,
           executedByFallback: byFallback.length,
-          turnIds: byHarness.map((r) => r.harnessTurnId).filter(Boolean).slice(0, 10)
+          turnIds: byHarness
+            .map((r) => r.harnessTurnId)
+            .filter(Boolean)
+            .slice(0, 10)
         }
       });
     }
@@ -229,7 +234,12 @@ export async function runFamilyA({ trueforgeUrl, harnessReachable }) {
       const pred = results.get(c.id)?.settlementId ?? null;
       const banned = c.expect.mustNotResolveTo || [];
       if (pred && banned.includes(pred)) {
-        mustNotViolations.push({ id: c.id, hard: c.hard, resolvedTo: pred, why: results.get(c.id)?.llmWhy ?? null });
+        mustNotViolations.push({
+          id: c.id,
+          hard: c.hard,
+          resolvedTo: pred,
+          why: results.get(c.id)?.llmWhy ?? null
+        });
       }
     }
     suite.check({
@@ -323,7 +333,7 @@ export async function runFamilyA({ trueforgeUrl, harnessReachable }) {
     gold: c.expect.settlementId ?? null,
     // maximally lucky: correct where a correct answer exists, and where none
     // exists it still commits to something.
-    predicted: c.expect.settlementId ?? (c.expect.mustNotResolveTo?.[0] ?? 'np-rasuwa-haku')
+    predicted: c.expect.settlementId ?? c.expect.mustNotResolveTo?.[0] ?? 'np-rasuwa-haku'
   }));
   const abstainerRows = golden.cases.map((c) => ({
     id: c.id,
@@ -430,7 +440,8 @@ export async function runFamilyA({ trueforgeUrl, harnessReachable }) {
     suite.skip({
       id: 'A8.1',
       name: 'turning tier 3 on does not make settlement resolution worse than tiers 1+2 alone',
-      reason: 'the TrueForge harness was not reachable, so there is no tier-3 scorecard to compare against'
+      reason:
+        'the TrueForge harness was not reachable, so there is no tier-3 scorecard to compare against'
     });
   }
 

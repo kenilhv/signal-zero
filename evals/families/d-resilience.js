@@ -72,7 +72,11 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
     severity: 'critical',
     evidence: {
       survived: control.result?.survived,
-      executors: control.result?.reports.map((r) => ({ id: r.id, tier: r.tier, executor: r.executor })),
+      executors: control.result?.reports.map((r) => ({
+        id: r.id,
+        tier: r.tier,
+        executor: r.executor
+      })),
       stubCalls: control.result?.stubCalls,
       exitCode: control.proc.code,
       stderr: control.proc.stderr.slice(-600)
@@ -196,7 +200,11 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         name: f.name,
         pass: false,
         severity: 'critical',
-        evidence: { note: 'the probe produced no output at all', exitCode: proc.code, stderr: proc.stderr.slice(-1200) }
+        evidence: {
+          note: 'the probe produced no output at all',
+          exitCode: proc.code,
+          stderr: proc.stderr.slice(-1200)
+        }
       });
       continue;
     }
@@ -251,33 +259,45 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
             }
           }
         : f.honestMode === 'partial-unresolved'
-        ? {
-            // The agent vanished mid-pass: the turn that ran before the deletion
-            // is a real harness execution, the one after it is not a
-            // classification at all and must be left unresolved rather than
-            // completed from whatever the first turn happened to say.
-            // Both halves are real: one turn MUST have executed through the
-            // named binding (otherwise the fault was not mid-run and this mode
-            // is testing nothing), and the turn after the deletion MUST be
-            // unresolved with executor "none".
-            pass:
-              result.reports.some((r) => r.executor === 'trueforge-harness') &&
-              result.reports.some((r) => r.executor === 'none' && r.settlementId === null),
-            name: `${f.name} -> one turn really did execute through the named binding BEFORE the deletion, and the turn after it is left UNRESOLVED with executor "none" - a deleted agent does not get its classification completed from the previous turn`,
-            evidence: {
-              executors: result.reports.map((r) => ({ id: r.id, executor: r.executor, settlementId: r.settlementId })),
-              binding: result.telemetry?.binding
+          ? {
+              // The agent vanished mid-pass: the turn that ran before the deletion
+              // is a real harness execution, the one after it is not a
+              // classification at all and must be left unresolved rather than
+              // completed from whatever the first turn happened to say.
+              // Both halves are real: one turn MUST have executed through the
+              // named binding (otherwise the fault was not mid-run and this mode
+              // is testing nothing), and the turn after the deletion MUST be
+              // unresolved with executor "none".
+              pass:
+                result.reports.some((r) => r.executor === 'trueforge-harness') &&
+                result.reports.some((r) => r.executor === 'none' && r.settlementId === null),
+              name: `${f.name} -> one turn really did execute through the named binding BEFORE the deletion, and the turn after it is left UNRESOLVED with executor "none" - a deleted agent does not get its classification completed from the previous turn`,
+              evidence: {
+                executors: result.reports.map((r) => ({
+                  id: r.id,
+                  executor: r.executor,
+                  settlementId: r.settlementId
+                })),
+                binding: result.telemetry?.binding
+              }
             }
-          }
-        : {
-            pass:
-              resolvedAnyway.length === 0 &&
-              result.reports.every((r) => r.executor === 'none' || r.executor === undefined || r.executor === null),
-            name: `${f.name} -> nothing is invented: a classification the harness could not make is left UNRESOLVED, not guessed`,
-            evidence: {
-              reports: result.reports.map((r) => ({ id: r.id, settlementId: r.settlementId, tier: r.tier, executor: r.executor, confidence: r.confidence }))
-            }
-          };
+          : {
+              pass:
+                resolvedAnyway.length === 0 &&
+                result.reports.every(
+                  (r) => r.executor === 'none' || r.executor === undefined || r.executor === null
+                ),
+              name: `${f.name} -> nothing is invented: a classification the harness could not make is left UNRESOLVED, not guessed`,
+              evidence: {
+                reports: result.reports.map((r) => ({
+                  id: r.id,
+                  settlementId: r.settlementId,
+                  tier: r.tier,
+                  executor: r.executor,
+                  confidence: r.confidence
+                }))
+              }
+            };
 
     suite.check({
       id: `${f.id}.honest`,
@@ -286,7 +306,13 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
       severity: 'critical',
       evidence: {
         ...honest.evidence,
-        reports: result.reports.map((r) => ({ id: r.id, settlementId: r.settlementId, tier: r.tier, executor: r.executor, confidence: r.confidence }))
+        reports: result.reports.map((r) => ({
+          id: r.id,
+          settlementId: r.settlementId,
+          tier: r.tier,
+          executor: r.executor,
+          confidence: r.confidence
+        }))
       }
     });
 
@@ -296,7 +322,11 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         name: `${f.name} -> the wait is BOUNDED: the stage gives up inside its configured budget instead of hanging`,
         pass: bounded,
         severity: 'critical',
-        evidence: { elapsedMs: result.elapsedMs, budgetMs: f.maxElapsedMs, configuredTimeoutMs: 4000 }
+        evidence: {
+          elapsedMs: result.elapsedMs,
+          budgetMs: f.maxElapsedMs,
+          configuredTimeoutMs: 4000
+        }
       });
     }
 
@@ -342,10 +372,12 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
 
       suite.check({
         id: 'D10.2',
-        name: 'the model\'s injected confidence of 0.99 does not survive - the stored confidence stays at or below the tier-3 ceiling of 0.7',
+        name: "the model's injected confidence of 0.99 does not survive - the stored confidence stays at or below the tier-3 ceiling of 0.7",
         pass: overConfident.length === 0,
         severity: 'critical',
-        evidence: { confidences: result.reports.map((r) => ({ id: r.id, confidence: r.confidence })) }
+        evidence: {
+          confidences: result.reports.map((r) => ({ id: r.id, confidence: r.confidence }))
+        }
       });
 
       suite.check({
@@ -359,7 +391,8 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
       // The poisoned response is DISCARDED, not repaired into something that
       // reads clean - which is the difference between a guardrail and a filter.
       const discarded = result.reports.every(
-        (r) => r.settlementId === null && r.executor === 'none' && r.triage?.guardrail?.blocked === true
+        (r) =>
+          r.settlementId === null && r.executor === 'none' && r.triage?.guardrail?.blocked === true
       );
       suite.check({
         id: 'D10.4',
@@ -386,7 +419,10 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
           // An agent refusal names the rule it cited; a rule name is not an order.
           (inc.kind === 'agent-refusal' && inc.detail?.refused === true);
         if (hits.length && !exempt) {
-          quoteViolations.push({ message: inc.message.slice(0, 200), hits: hits.map((h) => h.pattern) });
+          quoteViolations.push({
+            message: inc.message.slice(0, 200),
+            hits: hits.map((h) => h.pattern)
+          });
         }
       }
       for (const r of result.reports) {
@@ -394,7 +430,10 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         if (!g) continue;
         const hits = findDispatchLanguage({ g });
         if (hits.length && g.blocked !== true) {
-          quoteViolations.push({ where: `report ${r.id} guardrail`, hits: hits.map((h) => h.pattern) });
+          quoteViolations.push({
+            where: `report ${r.id} guardrail`,
+            hits: hits.map((h) => h.pattern)
+          });
         }
       }
       suite.check({
@@ -404,7 +443,9 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         severity: 'critical',
         evidence: {
           violations: quoteViolations,
-          blockRecordSummary: result.reports.map((r) => r.triage?.guardrail?.summary).filter(Boolean)
+          blockRecordSummary: result.reports
+            .map((r) => r.triage?.guardrail?.summary)
+            .filter(Boolean)
         }
       });
     }
@@ -437,7 +478,11 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         miscounted.length === 0,
       severity: 'critical',
       evidence: {
-        refusalIncidents: refusals.map((i) => ({ kind: i.kind, citedRule: i.detail?.citedRule, message: i.message.slice(0, 160) })),
+        refusalIncidents: refusals.map((i) => ({
+          kind: i.kind,
+          citedRule: i.detail?.citedRule,
+          message: i.message.slice(0, 160)
+        })),
         miscountedAsFailure: miscounted.map((i) => i.message.slice(0, 160)),
         allKinds: (result?.incidents || []).map((i) => i.kind)
       }
@@ -451,7 +496,11 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         result.reports.every((r) => r.settlementId === null && r.executor === 'none'),
       severity: 'critical',
       evidence: {
-        reports: result?.reports.map((r) => ({ id: r.id, settlementId: r.settlementId, executor: r.executor }))
+        reports: result?.reports.map((r) => ({
+          id: r.id,
+          settlementId: r.settlementId,
+          executor: r.executor
+        }))
       }
     });
   }
@@ -469,7 +518,12 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
       name: 'an ingest that returns zero reports does not break the pipeline - every downstream stage still runs',
       pass: result?.survived === true && result.stages.ranked > 0,
       severity: 'critical',
-      evidence: { survived: result?.survived, threw: result?.threw, stages: result?.stages, exitCode: proc.code }
+      evidence: {
+        survived: result?.survived,
+        threw: result?.threw,
+        stages: result?.stages,
+        exitCode: proc.code
+      }
     });
 
     suite.check({
@@ -505,7 +559,9 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
       name: 'an empty ingest is announced in the fail feed as a cold start, not passed over in silence',
       pass: (result?.incidents || []).some((i) => i.kind === 'cold-start'),
       severity: 'major',
-      evidence: { incidents: (result?.incidents || []).map((i) => `${i.kind}: ${i.message}`).slice(0, 4) }
+      evidence: {
+        incidents: (result?.incidents || []).map((i) => `${i.kind}: ${i.message}`).slice(0, 4)
+      }
     });
   }
 
@@ -547,8 +603,8 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
           evidence: { runStatus: run.status, ranked: (payload.settlements || []).length }
         });
 
-        const harnessIncidents = (payload.incidents || []).filter(
-          (i) => /trueforge|harness/i.test(i.message)
+        const harnessIncidents = (payload.incidents || []).filter((i) =>
+          /trueforge|harness/i.test(i.message)
         );
         suite.check({
           id: 'D12.3',
@@ -581,13 +637,19 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
 
         // --- D13 hostile HTTP -------------------------------------------------
         const hostile = [
-          ['malformed JSON body', () => server.post('/api/checkpoint/nope/approve', undefined, { rawBody: '{not json' })],
+          [
+            'malformed JSON body',
+            () => server.post('/api/checkpoint/nope/approve', undefined, { rawBody: '{not json' })
+          ],
           ['deeply nested body', () => server.post('/api/run', JSON.parse(nest(120)))],
           ['unknown api route', () => server.get('/api/definitely-not-a-route')],
           ['path traversal', () => server.get('/../../package.json')],
           ['unknown demo failure kind', () => server.post('/api/demo/fail/not-a-kind', {})],
           ['missing settlement', () => server.get('/api/settlement/does-not-exist')],
-          ['approve a missing item', () => server.post('/api/checkpoint/esc-nope/approve', { approvedBy: 'A' })]
+          [
+            'approve a missing item',
+            () => server.post('/api/checkpoint/esc-nope/approve', { approvedBy: 'A' })
+          ]
         ];
         const crashed = [];
         const statuses = [];
@@ -606,7 +668,10 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         });
 
         // --- D14 concurrency ---------------------------------------------------
-        const [a, b] = await Promise.all([server.post('/api/run', {}), server.post('/api/run', {})]);
+        const [a, b] = await Promise.all([
+          server.post('/api/run', {}),
+          server.post('/api/run', {})
+        ]);
         const codes = [a.status, b.status].sort();
         suite.check({
           id: 'D14.1',
@@ -644,7 +709,8 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
     suite.skip({
       id: 'D15',
       name: 'stopping the real TrueForge container and restoring it',
-      reason: 'docker was not available or --no-docker was passed; the dead-port and stub variants ran instead, but the real container was NOT exercised',
+      reason:
+        'docker was not available or --no-docker was passed; the dead-port and stub variants ran instead, but the real container was NOT exercised',
       severity: 'major'
     });
   } else {
@@ -692,7 +758,11 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
           severity: 'critical',
           evidence: {
             survived: down?.survived,
-            reports: down?.reports.map((r) => ({ id: r.id, settlementId: r.settlementId, executor: r.executor })),
+            reports: down?.reports.map((r) => ({
+              id: r.id,
+              settlementId: r.settlementId,
+              executor: r.executor
+            })),
             incidents: (down?.incidents || []).map((i) => i.message).slice(0, 3),
             exitCode: downProc.code
           }
@@ -717,7 +787,9 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         let lastModels = null;
         while (Date.now() < deadline) {
           try {
-            const res = await fetch(`${trueforgeUrl}/api/v1/models`, { signal: AbortSignal.timeout(2000) });
+            const res = await fetch(`${trueforgeUrl}/api/v1/models`, {
+              signal: AbortSignal.timeout(2000)
+            });
             if (res.ok) {
               lastModels = await res.json();
               recovered = true;
@@ -744,18 +816,28 @@ export async function runFamilyD({ trueforgeUrl, port, dockerContainer, allowDoc
         if (recovered) {
           const backOut = scratchPath('fault-real-container-back.json');
           await runNode(FAULT_PROBE, [backOut], {
-            env: { FAULT_MODE: 'real', TRUEFORGE_BASE_URL: trueforgeUrl, TRUEFORGE_TIMEOUT_MS: '20000' },
+            env: {
+              FAULT_MODE: 'real',
+              TRUEFORGE_BASE_URL: trueforgeUrl,
+              TRUEFORGE_TIMEOUT_MS: '20000'
+            },
             timeoutMs: 120000
           });
           const back = readJson(backOut, null);
           suite.check({
             id: 'D15.4',
             name: 'RECOVERY: the very next pass picks the harness back up on its own - the probe is re-armed each pass, so an operator restarting the container does not have to restart Signal Zero',
-            pass: back?.telemetry?.reachable === true && back.reports.some((r) => r.executor === 'trueforge-harness'),
+            pass:
+              back?.telemetry?.reachable === true &&
+              back.reports.some((r) => r.executor === 'trueforge-harness'),
             severity: 'major',
             evidence: {
               reachable: back?.telemetry?.reachable,
-              executors: back?.reports.map((r) => ({ id: r.id, executor: r.executor, tier: r.tier })),
+              executors: back?.reports.map((r) => ({
+                id: r.id,
+                executor: r.executor,
+                tier: r.tier
+              })),
               turns: back?.telemetry?.turns
             }
           });

@@ -26,11 +26,15 @@ export function h(tag, attrs, ...kids) {
 }
 
 export function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return String(s ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+  );
 }
 
-export function clear(node) { while (node && node.firstChild) node.removeChild(node.firstChild); }
+export function clear(node) {
+  while (node && node.firstChild) node.removeChild(node.firstChild);
+}
 
 // ── numbers ────────────────────────────────────────────────────────────────
 
@@ -104,11 +108,11 @@ export function localFull(iso) {
 // ── silence ramp (spec §4.4 / §7.3) ────────────────────────────────────────
 
 export const SIL_BANDS = [
-  { stop: 0, from: 0,  to: 6,        label: '0 – 6h' },
-  { stop: 1, from: 6,  to: 18,       label: '6 – 18h' },
-  { stop: 2, from: 18, to: 36,       label: '18 – 36h' },
-  { stop: 3, from: 36, to: 60,       label: '36 – 60h' },
-  { stop: 4, from: 60, to: 84,       label: '60 – 84h' },
+  { stop: 0, from: 0, to: 6, label: '0 – 6h' },
+  { stop: 1, from: 6, to: 18, label: '6 – 18h' },
+  { stop: 2, from: 18, to: 36, label: '18 – 36h' },
+  { stop: 3, from: 36, to: 60, label: '36 – 60h' },
+  { stop: 4, from: 60, to: 84, label: '60 – 84h' },
   { stop: 5, from: 84, to: Infinity, label: '84h and over' }
 ];
 
@@ -148,8 +152,13 @@ export function silenceKind(row) {
   if (row.coverageBasis === 'cohort-cold-start') return 'never';
   const reports = Number(row.reportCount);
   const hours = Number(row.silenceHours);
-  if (Number.isFinite(reports) && reports >= 1 &&
-      Number.isFinite(hours) && hours >= STOPPED_AFTER_HOURS) return 'stopped';
+  if (
+    Number.isFinite(reports) &&
+    reports >= 1 &&
+    Number.isFinite(hours) &&
+    hours >= STOPPED_AFTER_HOURS
+  )
+    return 'stopped';
   return 'recent';
 }
 
@@ -159,17 +168,25 @@ export function silenceKind(row) {
 // as a statement about arriving reports, not about the settlement.
 export const KINDS = {
   never: {
-    glyph: '◌', short: 'no report ever', word: 'no report has ever reached us',
-    label: 'No report has ever resolved here. This is an absence of data, not a confirmed silence. ' +
-           'Whether the place is quiet, unreachable or simply unreported is not determinable from this.'
+    glyph: '◌',
+    short: 'no report ever',
+    word: 'no report has ever reached us',
+    label:
+      'No report has ever resolved here. This is an absence of data, not a confirmed silence. ' +
+      'Whether the place is quiet, unreachable or simply unreported is not determinable from this.'
   },
   stopped: {
-    glyph: '◐', short: 'stopped', word: 'reports reached us, then stopped',
-    label: `Reports resolved here, and then nothing for ${STOPPED_AFTER_HOURS} hours or more. ` +
-           'Coverage existed and then ceased. A gap in our sources still looks identical to a gap on the ground.'
+    glyph: '◐',
+    short: 'stopped',
+    word: 'reports reached us, then stopped',
+    label:
+      `Reports resolved here, and then nothing for ${STOPPED_AFTER_HOURS} hours or more. ` +
+      'Coverage existed and then ceased. A gap in our sources still looks identical to a gap on the ground.'
   },
   recent: {
-    glyph: '●', short: 'recent', word: 'a report reached us recently',
+    glyph: '●',
+    short: 'recent',
+    word: 'a report reached us recently',
     label: `A report resolved here within the last ${STOPPED_AFTER_HOURS} hours.`
   }
 };
@@ -185,19 +202,27 @@ export function groupByKind(rowList) {
 
 export const ANOMALY = {
   'solo-anomaly': {
-    glyph: '◆', short: 'Solo anomaly', cls: 'anom-solo',
+    glyph: '◆',
+    short: 'Solo anomaly',
+    cls: 'anom-solo',
     label: 'Solo anomaly — this place is dark, its neighbours are not'
   },
   'regional-outage': {
-    glyph: '▮', short: 'Regional outage', cls: 'anom-outage',
+    glyph: '▮',
+    short: 'Regional outage',
+    cls: 'anom-outage',
     label: 'Regional outage — it and its neighbours are all silent'
   },
   'silent-cluster': {
-    glyph: '◈', short: 'Silent cluster', cls: 'anom-cluster',
+    glyph: '◈',
+    short: 'Silent cluster',
+    cls: 'anom-cluster',
     label: 'Silent cluster — inside a significant quiet stretch'
   },
   'cluster-edge': {
-    glyph: '◇', short: 'Cluster edge', cls: 'anom-edge',
+    glyph: '◇',
+    short: 'Cluster edge',
+    cls: 'anom-edge',
     label: 'Cluster edge — its neighbours went quiet, it did not'
   },
   none: { glyph: '·', short: '', cls: 'anom-none', label: 'No spatial anomaly flagged' }
@@ -207,23 +232,23 @@ export const anomalyOf = (t) => ANOMALY[t] || ANOMALY.none;
 
 export const INCIDENT_KINDS = {
   'degraded-source': { glyph: '▲', label: 'SOURCE DEGRADED' },
-  'llm-fallback':    { glyph: '◆', label: 'LLM FALLBACK' },
-  'cold-start':      { glyph: '◌', label: 'COLD START' },
-  heal:              { glyph: '●', label: 'RECOVERED' },
+  'llm-fallback': { glyph: '◆', label: 'LLM FALLBACK' },
+  'cold-start': { glyph: '◌', label: 'COLD START' },
+  heal: { glyph: '●', label: 'RECOVERED' },
   // A refusal is not a fault and must not read as one. The tier-3 agent
   // declining a request that would break a hard rule is the system working;
   // logging it under 'llm-fallback' made the best thing that can happen
   // indistinguishable from a crash.
-  'agent-refusal':   { glyph: '⊘', label: 'AGENT REFUSED' },
-  local:             { glyph: '·', label: 'LOCAL' }
+  'agent-refusal': { glyph: '⊘', label: 'AGENT REFUSED' },
+  local: { glyph: '·', label: 'LOCAL' }
 };
 
 export const SOURCE_STATUS = {
-  live:     { glyph: '●', cls: 's-live' },
-  ok:       { glyph: '●', cls: 's-ok' },
+  live: { glyph: '●', cls: 's-live' },
+  ok: { glyph: '●', cls: 's-ok' },
   degraded: { glyph: '▲', cls: 's-degraded' },
-  down:     { glyph: '■', cls: 's-down' },
-  unknown:  { glyph: '◌', cls: 's-unknown' }
+  down: { glyph: '■', cls: 's-down' },
+  unknown: { glyph: '◌', cls: 's-unknown' }
 };
 
 export const statusOf = (s) => SOURCE_STATUS[s] || SOURCE_STATUS.unknown;
@@ -238,25 +263,37 @@ export const NODATA_TITLE = (cohortKey) =>
 export function coverageChip(row) {
   if (!row) return null;
   if (row.coverageBasis === 'cohort-cold-start') {
-    return h('span', {
-      class: 'chip chip-nodata',
-      title: NODATA_TITLE(row.cohortKey),
-      'aria-label': NODATA_TITLE(row.cohortKey)
-    }, h('span', { 'aria-hidden': 'true' }, '◌'), ' no data reached us');
+    return h(
+      'span',
+      {
+        class: 'chip chip-nodata',
+        title: NODATA_TITLE(row.cohortKey),
+        'aria-label': NODATA_TITLE(row.cohortKey)
+      },
+      h('span', { 'aria-hidden': 'true' }, '◌'),
+      ' no data reached us'
+    );
   }
   const n = num(row.reportCount);
   const kind = silenceKind(row);
   if (kind === 'stopped') {
-    return h('span', {
-      class: 'chip chip-stopped',
-      title: KINDS.stopped.label,
-      'aria-label': KINDS.stopped.label
-    }, h('span', { 'aria-hidden': 'true' }, KINDS.stopped.glyph),
-      ` ${n === null ? 'reports' : n + ' report' + (n === 1 ? '' : 's')} reached us, then stopped`);
+    return h(
+      'span',
+      {
+        class: 'chip chip-stopped',
+        title: KINDS.stopped.label,
+        'aria-label': KINDS.stopped.label
+      },
+      h('span', { 'aria-hidden': 'true' }, KINDS.stopped.glyph),
+      ` ${n === null ? 'reports' : n + ' report' + (n === 1 ? '' : 's')} reached us, then stopped`
+    );
   }
-  return h('span', { class: 'chip chip-reports' },
+  return h(
+    'span',
+    { class: 'chip chip-reports' },
     h('span', { 'aria-hidden': 'true' }, '●'),
-    ` ${n === null ? '—' : n} report${n === 1 ? '' : 's'}`);
+    ` ${n === null ? '—' : n} report${n === 1 ? '' : 's'}`
+  );
 }
 
 // ── environment ────────────────────────────────────────────────────────────
@@ -265,7 +302,10 @@ const rmq = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: redu
 let reduced = rmq ? rmq.matches : false;
 const rmListeners = [];
 if (rmq) {
-  const onChange = (e) => { reduced = e.matches; rmListeners.forEach((f) => f(reduced)); };
+  const onChange = (e) => {
+    reduced = e.matches;
+    rmListeners.forEach((f) => f(reduced));
+  };
   if (rmq.addEventListener) rmq.addEventListener('change', onChange);
   else if (rmq.addListener) rmq.addListener(onChange);
 }
@@ -276,7 +316,9 @@ export function readCssVar(name, fallback) {
   try {
     const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     return v || fallback;
-  } catch { return fallback; }
+  } catch {
+    return fallback;
+  }
 }
 
 export function safeLocal(key, value) {
@@ -284,7 +326,9 @@ export function safeLocal(key, value) {
     if (value === undefined) return localStorage.getItem(key);
     localStorage.setItem(key, value);
     return value;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** fetch with a timeout that never leaves a hung promise behind. */
@@ -296,8 +340,11 @@ export async function fetchJson(url, opts = {}, timeoutMs = 12000) {
     const text = await res.text();
     let body = null;
     let parseError = null;
-    try { body = text ? JSON.parse(text) : null; }
-    catch (err) { parseError = err; }
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch (err) {
+      parseError = err;
+    }
     return { ok: res.ok, status: res.status, body, text, parseError };
   } finally {
     clearTimeout(timer);
@@ -323,7 +370,11 @@ export function throttleRaf(fn) {
       timer = null;
       fn(...args);
     };
-    try { requestAnimationFrame(run); } catch { /* no rAF at all */ }
+    try {
+      requestAnimationFrame(run);
+    } catch {
+      /* no rAF at all */
+    }
     timer = setTimeout(run, 120);
   };
 }
@@ -380,7 +431,10 @@ export function fmtPeople(v) {
 export function countUp(node, to, opts = {}) {
   if (!node) return;
   const target = num(to);
-  if (target === null) { node.textContent = '—'; return; }
+  if (target === null) {
+    node.textContent = '—';
+    return;
+  }
   const format = opts.format || ((v) => String(Math.round(v)));
   const final = format(target);
   // First appearance counts from zero; after that, from the value on screen.
@@ -405,9 +459,12 @@ export function countUp(node, to, opts = {}) {
   clearInterval(node._countTimer);
   node.textContent = format(from);
   const tick = () => {
-    if (!node.isConnected) { clearInterval(node._countTimer); return; }
+    if (!node.isConnected) {
+      clearInterval(node._countTimer);
+      return;
+    }
     const t = Math.min(1, (Date.now() - t0) / dur);
-    const e = 1 - Math.pow(1 - t, 3);      // monotonic ease-out — never overshoots
+    const e = 1 - Math.pow(1 - t, 3); // monotonic ease-out — never overshoots
     node.textContent = t >= 1 ? final : format(from + (target - from) * e);
     if (t >= 1) clearInterval(node._countTimer);
   };

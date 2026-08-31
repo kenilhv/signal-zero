@@ -102,7 +102,10 @@ for (const text of TRUE_NEGATIVES) {
 
 test('catches letter-spaced dispatch language', () => {
   const v = assertBlocked('s e n d  t e a m s  to Haku now');
-  assert.ok(v.violations.some((x) => x.obfuscated), 'should be marked obfuscated');
+  assert.ok(
+    v.violations.some((x) => x.obfuscated),
+    'should be marked obfuscated'
+  );
 });
 
 test('catches leetspeak dispatch language', () => {

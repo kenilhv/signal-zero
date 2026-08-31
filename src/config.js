@@ -102,7 +102,10 @@ export const TRUEFORGE_TIER3_CONCURRENCY = int('TRUEFORGE_TIER3_CONCURRENCY', 4)
 // registry. Every draft is run through src/guardrails/ before it is accepted; a
 // violation blocks it and the deterministic template in checkpoint.js is used
 // instead, with a visible incident. See src/harness/escalation-drafter.js.
-export const TRUEFORGE_DRAFTER_AGENT = str('TRUEFORGE_DRAFTER_AGENT', 'signal-zero-escalation-drafter');
+export const TRUEFORGE_DRAFTER_AGENT = str(
+  'TRUEFORGE_DRAFTER_AGENT',
+  'signal-zero-escalation-drafter'
+);
 // Independent kill switch. TRUEFORGE_ENABLED=false disables this too.
 export const TRUEFORGE_DRAFT_ENABLED = bool('TRUEFORGE_DRAFT_ENABLED', true);
 // Much larger than tier 3's: a measured packet is ~940 output tokens and takes

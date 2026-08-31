@@ -55,7 +55,9 @@ export async function runFamilyB() {
 
   const rankMod = await import(pathToFileURL(path.join(SRC, 'pipeline', 'rank.js')).href);
   const dedupMod = await import(pathToFileURL(path.join(SRC, 'pipeline', 'dedup.js')).href);
-  const checkpointMod = await import(pathToFileURL(path.join(SRC, 'pipeline', 'checkpoint.js')).href);
+  const checkpointMod = await import(
+    pathToFileURL(path.join(SRC, 'pipeline', 'checkpoint.js')).href
+  );
 
   const {
     rank,
@@ -113,7 +115,10 @@ export async function runFamilyB() {
   }
 
   const baseReports = syntheticReports(1, 80);
-  const baseClusters = dedup(baseReports.map((r) => ({ ...r })), gazetteer).clusters;
+  const baseClusters = dedup(
+    baseReports.map((r) => ({ ...r })),
+    gazetteer
+  ).clusters;
   const baseRanked = rank(gazetteer, baseClusters, baseReports, now, {
     adjacency: corridor,
     emitIncidents: false
@@ -167,7 +172,9 @@ export async function runFamilyB() {
 
   // Stability across permutations of the input arrays.
   const fingerprint = (rows) =>
-    rows.map((r) => `${r.rank}:${r.settlementId}:${r.giZScore}:${r.surprisal}:${r.silenceHours}`).join('|');
+    rows
+      .map((r) => `${r.rank}:${r.settlementId}:${r.giZScore}:${r.surprisal}:${r.silenceHours}`)
+      .join('|');
   const baseFp = fingerprint(baseRanked);
   const permFps = [];
   for (let t = 0; t < 12; t++) {
@@ -200,7 +207,12 @@ export async function runFamilyB() {
   const repeatFps = [];
   for (let t = 0; t < 5; t++) {
     repeatFps.push(
-      fingerprint(rank(gazetteer, baseClusters, baseReports, now, { adjacency: corridor, emitIncidents: false }))
+      fingerprint(
+        rank(gazetteer, baseClusters, baseReports, now, {
+          adjacency: corridor,
+          emitIncidents: false
+        })
+      )
     );
   }
   suite.check({
@@ -260,7 +272,11 @@ export async function runFamilyB() {
       severity: 'critical',
       evidence: {
         fresh: { rank: fresh.rank, silenceHours: fresh.silenceHours, surprisal: fresh.surprisal },
-        silent: { rank: silent.rank, silenceHours: silent.silenceHours, surprisal: silent.surprisal }
+        silent: {
+          rank: silent.rank,
+          silenceHours: silent.silenceHours,
+          surprisal: silent.surprisal
+        }
       }
     });
   }
@@ -287,7 +303,10 @@ export async function runFamilyB() {
       // Force one settlement fresh and one silent-for-96h.
       const freshId = gazetteer[Math.floor(rng() * gazetteer.length)].id;
       reports.push(mkReport(`fresh${trial}`, freshId, 0.1));
-      const ranked = rank(gazetteer, [], reports, now, { adjacency: corridor, emitIncidents: false });
+      const ranked = rank(gazetteer, [], reports, now, {
+        adjacency: corridor,
+        emitIncidents: false
+      });
       const fresh = ranked.find((r) => r.settlementId === freshId);
       const silentAbove = ranked.filter((r) => r.silenceHours >= 96 && r.rank > fresh.rank);
       if (silentAbove.length) {
@@ -302,7 +321,14 @@ export async function runFamilyB() {
             anomalyType: fresh.anomalyType,
             isEscalationCandidate: fresh.isEscalationCandidate
           },
-          outrankedSilent: silentAbove.slice(0, 3).map((r) => ({ name: r.name, rank: r.rank, silenceHours: r.silenceHours, gi: r.giZScore }))
+          outrankedSilent: silentAbove
+            .slice(0, 3)
+            .map((r) => ({
+              name: r.name,
+              rank: r.rank,
+              silenceHours: r.silenceHours,
+              gi: r.giZScore
+            }))
         };
         violations.push(record);
         if (fresh.rank <= 10) topTenViolations.push(record);
@@ -311,7 +337,12 @@ export async function runFamilyB() {
       // still-reporting settlement next to a dark stretch, rather than claiming
       // to be silent itself?
       for (const r of ranked) {
-        if (r.silenceHours < 6 && r.rank <= 10 && r.anomalyType !== 'cluster-edge' && r.anomalyType !== 'none') {
+        if (
+          r.silenceHours < 6 &&
+          r.rank <= 10 &&
+          r.anomalyType !== 'cluster-edge' &&
+          r.anomalyType !== 'none'
+        ) {
           mislabelled++;
         }
       }
@@ -357,9 +388,7 @@ export async function runFamilyB() {
       trials: 40,
       anywhereInList: violations.length,
       insideTopTen: topTenViolations.length,
-      worstFreshRank: violations.length
-        ? Math.min(...violations.map((v) => v.fresh.rank))
-        : null
+      worstFreshRank: violations.length ? Math.min(...violations.map((v) => v.fresh.rank)) : null
     });
     suite.check({
       id: 'B3.2b',
@@ -389,7 +418,10 @@ export async function runFamilyB() {
       name: 'no settlement heard from within the last 6 hours is ever an escalation candidate, on any input',
       pass: escalationViolations.length === 0,
       severity: 'critical',
-      evidence: { violations: escalationViolations.slice(0, 5), threshold: ESCALATION_MIN_SILENCE_HOURS }
+      evidence: {
+        violations: escalationViolations.slice(0, 5),
+        threshold: ESCALATION_MIN_SILENCE_HOURS
+      }
     });
   }
 
@@ -450,7 +482,21 @@ export async function runFamilyB() {
           district: 'Fuzz',
           lat: 28,
           lon: 85,
-          population: pick(rng, [0, 1, 12, 4999, 5000, 20000, 20001, 1e6, 1e12, null, undefined, -5, NaN]),
+          population: pick(rng, [
+            0,
+            1,
+            12,
+            4999,
+            5000,
+            20000,
+            20001,
+            1e6,
+            1e12,
+            null,
+            undefined,
+            -5,
+            NaN
+          ]),
           hazardTier: pick(rng, [1, 2, 3, 0, 7, null, undefined, 'three'])
         });
       }
@@ -483,9 +529,18 @@ export async function runFamilyB() {
         const lam = r.lambdaPerHour;
         // rounding to 6dp is applied on the way out, so allow that tolerance
         if (!(lam >= LAMBDA_MIN_PER_HOUR - 1e-6 && lam <= LAMBDA_MAX_PER_HOUR + 1e-6)) {
-          outOfBounds.push({ trial, id: r.settlementId, lambdaPerHour: lam, cohortKey: r.cohortKey });
+          outOfBounds.push({
+            trial,
+            id: r.settlementId,
+            lambdaPerHour: lam,
+            cohortKey: r.cohortKey
+          });
         }
-        if (!Number.isFinite(r.expectedGapHours) || r.expectedGapHours < 2 - 1e-3 || r.expectedGapHours > 72 + 1e-3) {
+        if (
+          !Number.isFinite(r.expectedGapHours) ||
+          r.expectedGapHours < 2 - 1e-3 ||
+          r.expectedGapHours > 72 + 1e-3
+        ) {
           outOfBounds.push({ trial, id: r.settlementId, expectedGapHours: r.expectedGapHours });
         }
       }
@@ -613,7 +668,9 @@ export async function runFamilyB() {
       // simulateAmbiguousPair fabricates a pair when blocking produced none;
       // that fabrication has no weights and a null hoursApart.
       const fabricated =
-        p.hoursApart === null && p.logLikelihoodRatio === 0 && Object.keys(p.weights || {}).length === 0;
+        p.hoursApart === null &&
+        p.logLikelihoodRatio === 0 &&
+        Object.keys(p.weights || {}).length === 0;
       if (fabricated) return { reachable: false, vector: null, p: null };
       return {
         reachable: true,
@@ -662,7 +719,12 @@ export async function runFamilyB() {
     });
 
     // Monotonicity in each field, holding the others fixed.
-    const by = new Map(readings.map((r) => [`${r.vector.geo}/${r.vector.time}/${r.vector.text}/${r.vector.source}`, r.p]));
+    const by = new Map(
+      readings.map((r) => [
+        `${r.vector.geo}/${r.vector.time}/${r.vector.text}/${r.vector.source}`,
+        r.p
+      ])
+    );
     const monoFailures = [];
     const check = (a, b, why) => {
       if (by.has(a) && by.has(b) && !(by.get(a) > by.get(b))) {
@@ -671,13 +733,33 @@ export async function runFamilyB() {
     };
     for (const src of ['same', 'diff']) {
       for (const txt of ['high', 'med', 'low']) {
-        check(`same/lt6h/${txt}/${src}`, `same/lt24h/${txt}/${src}`, 'closer in time must score higher');
-        check(`same/lt24h/${txt}/${src}`, `same/lt72h/${txt}/${src}`, 'closer in time must score higher');
+        check(
+          `same/lt6h/${txt}/${src}`,
+          `same/lt24h/${txt}/${src}`,
+          'closer in time must score higher'
+        );
+        check(
+          `same/lt24h/${txt}/${src}`,
+          `same/lt72h/${txt}/${src}`,
+          'closer in time must score higher'
+        );
       }
       for (const t of ['lt6h', 'lt24h', 'lt72h']) {
-        check(`same/${t}/high/${src}`, `same/${t}/med/${src}`, 'more textual agreement must score higher');
-        check(`same/${t}/med/${src}`, `same/${t}/low/${src}`, 'more textual agreement must score higher');
-        check(`same/${t}/high/${src}`, `adjacent/${t}/high/${src}`, 'the same settlement must outscore an adjacent one');
+        check(
+          `same/${t}/high/${src}`,
+          `same/${t}/med/${src}`,
+          'more textual agreement must score higher'
+        );
+        check(
+          `same/${t}/med/${src}`,
+          `same/${t}/low/${src}`,
+          'more textual agreement must score higher'
+        );
+        check(
+          `same/${t}/high/${src}`,
+          `adjacent/${t}/high/${src}`,
+          'the same settlement must outscore an adjacent one'
+        );
       }
     }
     suite.check({
@@ -716,7 +798,8 @@ export async function runFamilyB() {
     suite.check({
       id: 'B5.4',
       name: 'the ambiguous band is a strict subset of the admit threshold and is non-empty',
-      pass: AMBIGUOUS_LOW < AMBIGUOUS_HIGH && AMBIGUOUS_HIGH === ADMIT_THRESHOLD && AMBIGUOUS_LOW > 0,
+      pass:
+        AMBIGUOUS_LOW < AMBIGUOUS_HIGH && AMBIGUOUS_HIGH === ADMIT_THRESHOLD && AMBIGUOUS_LOW > 0,
       severity: 'major',
       evidence: { AMBIGUOUS_LOW, AMBIGUOUS_HIGH, ADMIT_THRESHOLD }
     });
@@ -747,7 +830,8 @@ export async function runFamilyB() {
       for (let e = 0; e < extra; e++) {
         const i = Math.floor(rng() * n);
         const j = Math.floor(rng() * n);
-        if (i !== j) edges.push({ aId: members[i], bId: members[j], matchProbability: 0.6 + rng() * 0.4 });
+        if (i !== j)
+          edges.push({ aId: members[i], bId: members[j], matchProbability: 0.6 + rng() * 0.4 });
       }
 
       const parts = refineComponent(members, edges);
@@ -788,7 +872,12 @@ export async function runFamilyB() {
       const ids = reports.map((r) => r.id);
       const flat = clusters.flatMap((c) => c.reportIds);
       if (flat.length !== ids.length || new Set(flat).size !== ids.length) {
-        dedupPartitionErrors.push({ t, reports: ids.length, clustered: flat.length, unique: new Set(flat).size });
+        dedupPartitionErrors.push({
+          t,
+          reports: ids.length,
+          clustered: flat.length,
+          unique: new Set(flat).size
+        });
       }
       for (const c of clusters) clusterRange.push(c.confidence);
       for (const p of ambiguousPairs) clusterRange.push(p.matchProbability);
@@ -814,7 +903,10 @@ export async function runFamilyB() {
       name: 'every cluster confidence and ambiguous-pair probability lies in [0,1]',
       pass: clusterRange.every((v) => Number.isFinite(v) && v >= 0 && v <= 1),
       severity: 'critical',
-      evidence: { checked: clusterRange.length, offending: clusterRange.filter((v) => !(v >= 0 && v <= 1)).slice(0, 5) }
+      evidence: {
+        checked: clusterRange.length,
+        offending: clusterRange.filter((v) => !(v >= 0 && v <= 1)).slice(0, 5)
+      }
     });
 
     // (c) determinism and permutation invariance of the clustering itself.
@@ -824,15 +916,30 @@ export async function runFamilyB() {
         .map((c) => c.reportIds.slice().sort().join('+'))
         .sort()
         .join('|');
-    const sigA = clusterSig(dedup(corpus.map((r) => ({ ...r })), gazetteer).clusters);
-    const sigB = clusterSig(dedup(corpus.map((r) => ({ ...r })), gazetteer).clusters);
+    const sigA = clusterSig(
+      dedup(
+        corpus.map((r) => ({ ...r })),
+        gazetteer
+      ).clusters
+    );
+    const sigB = clusterSig(
+      dedup(
+        corpus.map((r) => ({ ...r })),
+        gazetteer
+      ).clusters
+    );
     const rng2 = mulberry32(8);
     const shuffled = corpus.slice();
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(rng2() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    const sigC = clusterSig(dedup(shuffled.map((r) => ({ ...r })), gazetteer).clusters);
+    const sigC = clusterSig(
+      dedup(
+        shuffled.map((r) => ({ ...r })),
+        gazetteer
+      ).clusters
+    );
 
     suite.check({
       id: 'B6.5',
@@ -870,7 +977,10 @@ export async function runFamilyB() {
   // B7 - no dispatch-shaped field anywhere in a pipeline output
   // ==========================================================================
   {
-    const { clusters, ambiguousPairs } = dedup(baseReports.map((r) => ({ ...r })), gazetteer);
+    const { clusters, ambiguousPairs } = dedup(
+      baseReports.map((r) => ({ ...r })),
+      gazetteer
+    );
     const surfaces = {
       rankedRows: baseRanked,
       clusters,
@@ -963,7 +1073,8 @@ export async function runFamilyB() {
     const scan = (rows, label) => {
       for (const r of rows) {
         for (const [k, v] of Object.entries(r)) {
-          if (typeof v === 'number' && !Number.isFinite(v)) nonFinite.push({ label, id: r.settlementId, k, v: String(v) });
+          if (typeof v === 'number' && !Number.isFinite(v))
+            nonFinite.push({ label, id: r.settlementId, k, v: String(v) });
         }
       }
     };
@@ -971,7 +1082,10 @@ export async function runFamilyB() {
     scan(rank(gazetteer, [], [], now, { adjacency: corridor, emitIncidents: false }), 'empty');
     scan(rank(gazetteer, [], [], now, { adjacency: {}, emitIncidents: false }), 'no-adjacency');
     // one settlement only: n = 1 is the degenerate case for Gi*
-    scan(rank([gazetteer[0]], [], [], now, { adjacency: corridor, emitIncidents: false }), 'single');
+    scan(
+      rank([gazetteer[0]], [], [], now, { adjacency: corridor, emitIncidents: false }),
+      'single'
+    );
     // a perfectly uniform field: S = 0, the other Gi* degeneracy
     const uniformReports = gazetteer.map((s, i) => ({
       id: `u${i}`,
@@ -986,7 +1100,10 @@ export async function runFamilyB() {
       triage: null,
       clusterId: null
     }));
-    scan(rank(gazetteer, [], uniformReports, now, { adjacency: corridor, emitIncidents: false }), 'uniform');
+    scan(
+      rank(gazetteer, [], uniformReports, now, { adjacency: corridor, emitIncidents: false }),
+      'uniform'
+    );
 
     suite.check({
       id: 'B9.1',

@@ -140,8 +140,8 @@ function makeProvenance({
     reason: harness ? null : reason || 'not-attempted',
     // Only meaningful for a draft. Null on a template item rather than absent,
     // so the shape is stable and the UI never branches on key presence.
-    agent: harness ? agent ?? null : null,
-    turnId: harness ? turnId ?? null : null,
+    agent: harness ? (agent ?? null) : null,
+    turnId: harness ? (turnId ?? null) : null,
     // Which guardrails ran and passed. An empty array means "none recorded",
     // which is NOT the same as "none ran" - callers that know must pass them.
     guardrails: Array.isArray(guardrails) ? guardrails.slice() : []
@@ -358,7 +358,10 @@ export function buildShortlist(item, settlements = store.settlements) {
       district,
       // Context for a human reader. NOT a ranking key.
       settlementsInDistrict: inDistrict.length,
-      settlementsInScope: inDistrict.filter((s) => scopedIds.has(s.id)).map((s) => s.id).sort(),
+      settlementsInScope: inDistrict
+        .filter((s) => scopedIds.has(s.id))
+        .map((s) => s.id)
+        .sort(),
       populationInDistrict: inDistrict.reduce((sum, s) => sum + (Number(s.population) || 0), 0),
       ordering: 'alphabetical-by-district (non-preferential)'
     };

@@ -41,7 +41,7 @@ async function api(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(body) : undefined
   });
   const text = await res.text();
   let json = null;
@@ -63,7 +63,8 @@ async function waitForTurn(sessionId, turnId) {
     const turn = await api('GET', `/api/v1/sessions/${sessionId}/turns/${turnId}`);
     const status = turn?.state?.status;
     if (status && status !== 'running') return turn;
-    if (Date.now() > deadline) throw new Error(`turn ${turnId} still running after ${TIMEOUT_MS}ms`);
+    if (Date.now() > deadline)
+      throw new Error(`turn ${turnId} still running after ${TIMEOUT_MS}ms`);
     await sleep(POLL_MS);
   }
 }
@@ -121,7 +122,7 @@ async function checkNamedReference() {
       'early on Wednesday as the Bhote Koshi rose several metres. Residents said ' +
       'the bazaar area was inundated. Contact with settlements upstream has not ' +
       'been re-established.',
-    publishedAt: '2026-08-26T04:15:00Z',
+    publishedAt: '2026-08-26T04:15:00Z'
   };
 
   // THE SAME PROMPT SHAPE THE PIPELINE SENDS. Without the candidate shortlist
@@ -132,7 +133,7 @@ async function checkNamedReference() {
     'np-rasuwa-syabrubesi (Syabrubesi, Rasuwa)',
     'np-rasuwa-timure (Timure, Rasuwa)',
     'np-rasuwa-haku (Haku, Rasuwa)',
-    'np-nuwakot-betrawati (Betrawati, Nuwakot)',
+    'np-nuwakot-betrawati (Betrawati, Nuwakot)'
   ];
   const offeredIds = SHORTLIST.map((s) => s.split(' ')[0]);
 
@@ -146,8 +147,8 @@ async function checkNamedReference() {
         `SOURCE: ${report.sourceName} (${report.sourceType})\n` +
         `TITLE: ${report.title}\n` +
         `TEXT: ${report.text}\n\n` +
-        `CANDIDATE SETTLEMENTS (or null if none apply):\n${SHORTLIST.join('\n')}`,
-    },
+        `CANDIDATE SETTLEMENTS (or null if none apply):\n${SHORTLIST.join('\n')}`
+    }
   ]);
 
   console.log(`turn id       : ${turn.id}`);
@@ -172,7 +173,12 @@ async function checkNamedReference() {
   // ------------------------------------------------------------------------
   const parsed = (() => {
     try {
-      return JSON.parse(raw.replace(/^\s*```(?:json)?/i, '').replace(/```\s*$/, '').trim());
+      return JSON.parse(
+        raw
+          .replace(/^\s*```(?:json)?/i, '')
+          .replace(/```\s*$/, '')
+          .trim()
+      );
     } catch {
       return null;
     }
@@ -187,10 +193,14 @@ async function checkNamedReference() {
   console.log(`parsed JSON   : ${parsed ? 'yes' : 'NO - unparseable'}`);
   console.log(`settlementId  : ${JSON.stringify(settlementId)}`);
   console.log(`offered       : ${offeredIds.join(', ')}`);
-  console.log(`accepted      : ${accepted ? 'yes (offered, or null - the honest abstain)' : 'NO - NOT ON THE OFFERED SHORTLIST'}`);
+  console.log(
+    `accepted      : ${accepted ? 'yes (offered, or null - the honest abstain)' : 'NO - NOT ON THE OFFERED SHORTLIST'}`
+  );
 
   if (!parsed) {
-    throw new Error('check A: the agent did not return parseable JSON - transport worked, the contract did not');
+    throw new Error(
+      'check A: the agent did not return parseable JSON - transport worked, the contract did not'
+    );
   }
   if (!accepted) {
     throw new Error(
@@ -216,8 +226,8 @@ async function checkApprovalGate() {
       content:
         'Collect what the live web reports about the 26 August 2026 Trishuli / ' +
         'Bhote Koshi flood in Rasuwa district, Nepal. Use search_engine with the ' +
-        'query: Trishuli flood Nepal Rasuwa August 2026.',
-    },
+        'query: Trishuli flood Nepal Rasuwa August 2026.'
+    }
   ]);
 
   console.log(`turn 1 id     : ${first.id}`);
@@ -247,7 +257,9 @@ async function checkApprovalGate() {
     const call = ev.tool_calls[0];
     const gated = await describeToolCall(sessionId, call.id);
 
-    console.log(`\n--- tool.approval_required #${approved.length + 1} (turn ${turnNo} is PAUSED) ---`);
+    console.log(
+      `\n--- tool.approval_required #${approved.length + 1} (turn ${turnNo} is PAUSED) ---`
+    );
     console.log(`turn id       : ${turn.id}`);
     console.log(`turn status   : ${turn.state.status}   <- "done" here means PAUSED, not finished`);
     console.log(`thread_id     : ${ev.thread_id}`);
@@ -263,8 +275,8 @@ async function checkApprovalGate() {
         type: 'user.tool_approval',
         thread_id: ev.thread_id,
         tool_call_id: call.id,
-        approval: { status: 'allow' },
-      },
+        approval: { status: 'allow' }
+      }
     ]);
   }
 
@@ -278,7 +290,9 @@ async function checkApprovalGate() {
   console.log(`\ntool.response events: ${responses.length}`);
   for (const r of responses) {
     console.log(`  tool_call_id: ${r.tool_call_id}`);
-    console.log(`  content (first 400 chars): ${String(r.content).slice(0, 400).replace(/\s+/g, ' ')}`);
+    console.log(
+      `  content (first 400 chars): ${String(r.content).slice(0, 400).replace(/\s+/g, ' ')}`
+    );
   }
 
   console.log('\n--- FINAL OUTPUT ---');
@@ -295,7 +309,7 @@ async function checkApprovalGate() {
     approvedCalls: approved,
     status: turn.state.status,
     pendingGatesAtEnd: approvalsOf(turn).length,
-    toolResponses: responses.length,
+    toolResponses: responses.length
   };
 }
 
@@ -323,7 +337,7 @@ async function describeToolCall(sessionId, toolCallId) {
       const args = tc.tool?.arguments ?? tc.function?.arguments;
       return {
         name: tc.tool?.name || tc.function?.name || '(unknown)',
-        args: args ? (typeof args === 'string' ? args : JSON.stringify(args)) : null,
+        args: args ? (typeof args === 'string' ? args : JSON.stringify(args)) : null
       };
     }
   }

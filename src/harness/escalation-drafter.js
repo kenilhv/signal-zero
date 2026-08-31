@@ -172,8 +172,13 @@ export function budgetPerPass() {
 
 /** Have we already spent the pass budget? */
 export function budgetExhausted() {
-  return telemetry.drafted + telemetry.guardrailBlocked + telemetry.parseRejected +
-    telemetry.turnFailed >= budgetPerPass();
+  return (
+    telemetry.drafted +
+      telemetry.guardrailBlocked +
+      telemetry.parseRejected +
+      telemetry.turnFailed >=
+    budgetPerPass()
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -308,8 +313,7 @@ export async function probe() {
     const models = Array.isArray(json?.data) ? json.data.map((m) => m?.name).filter(Boolean) : [];
     if (models.length && !models.includes(config.TRUEFORGE_MODEL)) {
       telemetry.reachable = false;
-      telemetry.lastError =
-        `model "${config.TRUEFORGE_MODEL}" not registered (have: ${models.join(', ')})`;
+      telemetry.lastError = `model "${config.TRUEFORGE_MODEL}" not registered (have: ${models.join(', ')})`;
       return { ok: false, reason: telemetry.lastError };
     }
 
@@ -340,9 +344,10 @@ export async function probe() {
     telemetry.lastError = null;
     return { ok: true, reason: null };
   } catch (err) {
-    const reason = err?.name === 'TimeoutError'
-      ? `no response within ${PROBE_TIMEOUT_MS}ms`
-      : String(err && err.message ? err.message : err);
+    const reason =
+      err?.name === 'TimeoutError'
+        ? `no response within ${PROBE_TIMEOUT_MS}ms`
+        : String(err && err.message ? err.message : err);
     telemetry.reachable = false;
     telemetry.lastError = reason;
     return { ok: false, reason };
@@ -446,25 +451,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * violation), 'garbage' (unparseable output).
  */
 function applyChaos(text) {
-  const mode = String(config.TRUEFORGE_DRAFT_CHAOS || '').trim().toLowerCase();
+  const mode = String(config.TRUEFORGE_DRAFT_CHAOS || '')
+    .trim()
+    .toLowerCase();
   if (!mode) return { text, chaos: null };
 
   if (mode === 'garbage') {
-    return { text: 'not json at all', chaos: { mode, injected: '(replaced output with non-JSON)' } };
+    return {
+      text: 'not json at all',
+      chaos: { mode, injected: '(replaced output with non-JSON)' }
+    };
   }
 
-  const injected = mode === 'certainty'
-    ? 'Haku is confirmed silent and no residents remain.'
-    : 'Dispatch a rescue team to Haku immediately and deploy the district response unit.';
+  const injected =
+    mode === 'certainty'
+      ? 'Haku is confirmed silent and no residents remain.'
+      : 'Dispatch a rescue team to Haku immediately and deploy the district response unit.';
 
   // Splice into the summary so it lands inside the human-facing prose, which is
   // where a real jailbreak would put it - not appended after the JSON where a
   // lazy parser would drop it before the guardrail ever ran.
   const marker = '"summary": "';
   const at = text.indexOf(marker);
-  const tainted = at === -1
-    ? `${text}\n${injected}`
-    : text.slice(0, at + marker.length) + injected + ' ' + text.slice(at + marker.length);
+  const tainted =
+    at === -1
+      ? `${text}\n${injected}`
+      : text.slice(0, at + marker.length) + injected + ' ' + text.slice(at + marker.length);
 
   return { text: tainted, chaos: { mode, injected } };
 }
@@ -537,7 +549,13 @@ export async function runDraftTurn(prompt) {
   telemetry.inputTokens += inputTokens;
   telemetry.outputTokens += outputTokens;
   telemetry.cacheReadTokens += cacheReadTokens;
-  telemetry.turns.push({ turnId, status: 'done', totalTokens, latencyMs, chaos: chaos?.mode ?? null });
+  telemetry.turns.push({
+    turnId,
+    status: 'done',
+    totalTokens,
+    latencyMs,
+    chaos: chaos?.mode ?? null
+  });
   telemetry.reachable = true;
 
   return {

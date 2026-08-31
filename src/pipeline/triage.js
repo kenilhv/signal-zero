@@ -105,12 +105,7 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-export const CATEGORIES = [
-  'corroboration-candidate',
-  'new-settlement',
-  'hazard-signal',
-  'noise'
-];
+export const CATEGORIES = ['corroboration-candidate', 'new-settlement', 'hazard-signal', 'noise'];
 
 // ---------------------------------------------------------------------------
 // Text normalization + hand-rolled character trigram cosine.
@@ -176,28 +171,79 @@ export function trigramCosine(a, b) {
 // ---------------------------------------------------------------------------
 
 const HAZARD_WORDS = [
-  'glof', 'glacial lake', 'outburst', 'flood', 'inundat', 'submerg',
-  'landslide', 'debris flow', 'debris', 'surge', 'breach', 'burst',
-  'water level', 'discharge', 'swollen', 'overflow', 'siren', 'warning',
-  'alert', 'evacuat', 'upstream', 'downstream', 'moraine', 'dam',
-  'river rose', 'rising river', 'cloudburst', 'washed away', 'swept away'
+  'glof',
+  'glacial lake',
+  'outburst',
+  'flood',
+  'inundat',
+  'submerg',
+  'landslide',
+  'debris flow',
+  'debris',
+  'surge',
+  'breach',
+  'burst',
+  'water level',
+  'discharge',
+  'swollen',
+  'overflow',
+  'siren',
+  'warning',
+  'alert',
+  'evacuat',
+  'upstream',
+  'downstream',
+  'moraine',
+  'dam',
+  'river rose',
+  'rising river',
+  'cloudburst',
+  'washed away',
+  'swept away'
 ];
 
 // Concrete, on-the-ground observation. Only these can turn a report into a
 // corroboration - i.e. positive evidence that somebody actually looked.
 const STRONG_STATUS_WORDS = [
-  'reached', 'contacted', 'casualt', 'injur', 'dead', 'death', 'missing',
-  'rescue', 'relief', 'shelter', 'displaced', 'damaged', 'destroyed',
-  'swept', 'washed away', 'cut off', 'households', 'houses', 'homes',
-  'search team', 'helicopter', 'security personnel', 'health post',
-  'no casualties', 'road blocked', 'distributed'
+  'reached',
+  'contacted',
+  'casualt',
+  'injur',
+  'dead',
+  'death',
+  'missing',
+  'rescue',
+  'relief',
+  'shelter',
+  'displaced',
+  'damaged',
+  'destroyed',
+  'swept',
+  'washed away',
+  'cut off',
+  'households',
+  'houses',
+  'homes',
+  'search team',
+  'helicopter',
+  'security personnel',
+  'health post',
+  'no casualties',
+  'road blocked',
+  'distributed'
 ];
 
 // Suggestive but not sufficient on its own. Two of these with no warning
 // framing count as corroboration; one does not.
 const WEAK_STATUS_WORDS = [
-  'residents', 'villagers', 'families', 'bridge', 'ward', 'confirmed',
-  'police post', 'local unit'
+  'residents',
+  'villagers',
+  'families',
+  'bridge',
+  'ward',
+  'confirmed',
+  'police post',
+  'local unit'
 ];
 
 const STATUS_WORDS = [...STRONG_STATUS_WORDS, ...WEAK_STATUS_WORDS];
@@ -205,25 +251,57 @@ const STATUS_WORDS = [...STRONG_STATUS_WORDS, ...WEAK_STATUS_WORDS];
 // Forward-looking framing: this report is telling people what MIGHT happen,
 // not reporting what did. A warning is never a corroboration.
 const WARNING_WORDS = [
-  'warned', 'warning', 'alert', 'advisory', 'forecast', 'siren', 'issued',
-  'expected to', 'may rise', 'could rise', 'on standby', 'preparedness'
+  'warned',
+  'warning',
+  'alert',
+  'advisory',
+  'forecast',
+  'siren',
+  'issued',
+  'expected to',
+  'may rise',
+  'could rise',
+  'on standby',
+  'preparedness'
 ];
 
 // Explicit statements that nobody has heard from a place. Signal Zero exists
 // precisely because these are the OPPOSITE of a corroboration - treating them
 // as confirmation would mark a silent settlement as covered.
 const NEGATIVE_CONTACT_WORDS = [
-  'no contact', 'not been reached', 'yet to be reached', 'unreachable',
-  'unaccounted', 'no word', 'no communication', 'cannot be reached',
-  'could not be reached', 'lost contact', 'no information', 'still silent',
+  'no contact',
+  'not been reached',
+  'yet to be reached',
+  'unreachable',
+  'unaccounted',
+  'no word',
+  'no communication',
+  'cannot be reached',
+  'could not be reached',
+  'lost contact',
+  'no information',
+  'still silent',
   'no response'
 ];
 
 const NOISE_WORDS = [
-  'trekking season', 'tourist arrival', 'cricket', 'election', 'stock market',
-  'share market', 'film', 'cinema', 'festival lineup', 'transfer window',
-  'cabinet reshuffle', 'horoscope', 'recipe', 'gold price', 'hotel booking',
-  'visit nepal campaign', 'match fixture'
+  'trekking season',
+  'tourist arrival',
+  'cricket',
+  'election',
+  'stock market',
+  'share market',
+  'film',
+  'cinema',
+  'festival lineup',
+  'transfer window',
+  'cabinet reshuffle',
+  'horoscope',
+  'recipe',
+  'gold price',
+  'hotel booking',
+  'visit nepal campaign',
+  'match fixture'
 ];
 
 // Words that, when they FOLLOW a matched settlement token, mean the token was
@@ -232,8 +310,16 @@ const NOISE_WORDS = [
 // Deliberately limited to hydrological / physical-feature words. Words like
 // "rural" are NOT here: "Uttargaya Rural Municipality" must still resolve.
 const GEOGRAPHIC_CONTEXT = new Set([
-  'river', 'khola', 'nadi', 'valley', 'corridor', 'basin', 'catchment',
-  'watershed', 'gorge', 'district'
+  'river',
+  'khola',
+  'nadi',
+  'valley',
+  'corridor',
+  'basin',
+  'catchment',
+  'watershed',
+  'gorge',
+  'district'
 ]);
 
 // Markers that a capitalized token in the RAW text is naming a place.
@@ -411,7 +497,8 @@ function classifyCategory(report, normalized, settlementId, unknownPlace) {
 
   // Hazard talk without settlement-level status: forecasts, warnings, upstream
   // observations. Useful for the hazard picture, never a corroboration.
-  if (hazard.n > 0) return { category: 'hazard-signal', strength: settlementId ? 0.85 : 0.7, signals };
+  if (hazard.n > 0)
+    return { category: 'hazard-signal', strength: settlementId ? 0.85 : 0.7, signals };
 
   return { category: 'noise', strength: 0.6, signals };
 }
@@ -434,7 +521,10 @@ function findUnknownPlace(report, index) {
     let best = 0;
     for (const entry of index.entries) {
       for (const v of entry.variants) {
-        if (v.norm === norm) { best = 1; break; }
+        if (v.norm === norm) {
+          best = 1;
+          break;
+        }
         const sim = cosineOfVectors(v.vector, trigramVector(cand));
         if (sim > best) best = sim;
       }
@@ -463,7 +553,10 @@ function tier1Match(report, index) {
       let m;
       while ((m = v.re.exec(normalized)) !== null) {
         // Reject "Trishuli river" / "Tadi khola" style geographic uses.
-        const after = normalized.slice(m.index + m[0].length).trimStart().split(' ')[0];
+        const after = normalized
+          .slice(m.index + m[0].length)
+          .trimStart()
+          .split(' ')[0];
         if (GEOGRAPHIC_CONTEXT.has(after)) continue;
         count++;
         if (!bestVariant || v.norm.length > bestVariant.norm.length) bestVariant = v;
@@ -505,7 +598,10 @@ function tier2Match(tokens, index, restrictTo = null) {
       if (nextToken && GEOGRAPHIC_CONTEXT.has(nextToken)) continue;
       let hasFeatureWord = false;
       for (let k = i; k < i + w; k++) {
-        if (GEOGRAPHIC_CONTEXT.has(tokens[k])) { hasFeatureWord = true; break; }
+        if (GEOGRAPHIC_CONTEXT.has(tokens[k])) {
+          hasFeatureWord = true;
+          break;
+        }
       }
       if (hasFeatureWord) continue;
       const wv = trigramVector(window);
@@ -568,7 +664,9 @@ function tier2Match(tokens, index, restrictTo = null) {
 
 const TIER3_INSTRUCTIONS =
   'You classify disaster-response reports for the 2026 Trishuli river GLOF in Nepal. ' +
-  'Reply with JSON only: {"category": one of ' + JSON.stringify(CATEGORIES) + ', ' +
+  'Reply with JSON only: {"category": one of ' +
+  JSON.stringify(CATEGORIES) +
+  ', ' +
   '"settlementId": one of the offered ids or null, "confidence": 0..1, "why": short string}. ' +
   'Never suggest sending anyone anywhere; you only label the text.';
 
@@ -579,7 +677,9 @@ const TIER3_INSTRUCTIONS =
  */
 function tier3Prompt(report, shortlist, { withReportId = false } = {}) {
   const options = shortlist
-    .map((c) => `${c.entry.settlement.id} (${c.entry.settlement.name}, ${c.entry.settlement.district})`)
+    .map(
+      (c) => `${c.entry.settlement.id} (${c.entry.settlement.name}, ${c.entry.settlement.district})`
+    )
     .join('\n');
   return (
     (withReportId ? `REPORT ID: ${report.id}\n` : '') +
@@ -659,7 +759,9 @@ function unwrapTier3(parsed) {
         throw err;
       }
       const reason = parsed.unresolved?.[0]?.reason;
-      throw new Error(`agent returned no classification${reason ? `: ${String(reason).slice(0, 120)}` : ''}`);
+      throw new Error(
+        `agent returned no classification${reason ? `: ${String(reason).slice(0, 120)}` : ''}`
+      );
     }
     return {
       category: first.category,
@@ -845,7 +947,11 @@ const HARNESS_SOURCE_NAME = 'TrueForge harness - triage tier 3';
  */
 function noteAdvisory(report, verdict, label, phase, executor) {
   if (!verdict || verdict.ok) return;
-  harness.countGuardrail(phase, false, verdict.violations.map((v) => v.rule));
+  harness.countGuardrail(
+    phase,
+    false,
+    verdict.violations.map((v) => v.rule)
+  );
   addIncident(
     'degraded-source',
     `GUARDRAIL ADVISORY (${phase}): "${label}" - ${describeVerdict(verdict)}. Not blocking; the classification was kept and this is on the record.`,
@@ -1050,7 +1156,7 @@ export async function triage(reports, settlements) {
       null,
       unknownPlace
     );
-    const catConfidence = clamp(0.5 + 0.3 * (strength - 0.5) / 0.5, 0.35, 0.75);
+    const catConfidence = clamp(0.5 + (0.3 * (strength - 0.5)) / 0.5, 0.35, 0.75);
     report.triage = {
       category,
       confidence: Number(catConfidence.toFixed(3)),
@@ -1166,10 +1272,10 @@ export async function triage(reports, settlements) {
   const plan = [];
   let llmCalls = 0;
   for (const { report, shortlist } of residual) {
-    const inputVerdict = guardInput(
-      `${report.title || ''}\n${report.text || ''}`,
-      { reportId: report.id, sourceName: report.sourceName }
-    );
+    const inputVerdict = guardInput(`${report.title || ''}\n${report.text || ''}`, {
+      reportId: report.id,
+      sourceName: report.sourceName
+    });
     if (inputVerdict.blocked) {
       plan.push({ report, shortlist, inputVerdict, action: 'input-blocked' });
       continue;
@@ -1197,8 +1303,10 @@ export async function triage(reports, settlements) {
   const dispatched = plan.filter((p) => p.action === 'classify');
   const harnessSettled = new Map(); // plan entry -> {ok:true,value} | {ok:false,error}
   if (harnessUsable && dispatched.length) {
-    const settled = await mapWithConcurrency(dispatched, TIER3_CONCURRENCY, ({ report, shortlist }) =>
-      tier3ViaHarness(report, shortlist)
+    const settled = await mapWithConcurrency(
+      dispatched,
+      TIER3_CONCURRENCY,
+      ({ report, shortlist }) => tier3ViaHarness(report, shortlist)
     );
     dispatched.forEach((entry, i) => harnessSettled.set(entry, settled[i]));
   }
@@ -1211,7 +1319,11 @@ export async function triage(reports, settlements) {
     const label = String(report.title || report.id).slice(0, 60);
 
     if (action === 'input-blocked') {
-      harness.countGuardrail('input', true, inputVerdict.violations.map((v) => v.rule));
+      harness.countGuardrail(
+        'input',
+        true,
+        inputVerdict.violations.map((v) => v.rule)
+      );
       harness.countUnresolved();
       blockAndRecord(report, inputVerdict, { label, phase: 'input' });
       continue;
@@ -1370,7 +1482,13 @@ export async function triage(reports, settlements) {
           harnessDownReason
         }
       );
-      report.triage = { ...report.triage, tier: 3, confidence: 0.3, matchedOn: null, executor: 'none' };
+      report.triage = {
+        ...report.triage,
+        tier: 3,
+        confidence: 0.3,
+        matchedOn: null,
+        executor: 'none'
+      };
       report.settlementId = null;
       continue;
     }
@@ -1389,7 +1507,11 @@ export async function triage(reports, settlements) {
       coverageBasis: report.coverageBasis || null
     });
     if (outputVerdict.blocked) {
-      harness.countGuardrail('output', true, outputVerdict.violations.map((v) => v.rule));
+      harness.countGuardrail(
+        'output',
+        true,
+        outputVerdict.violations.map((v) => v.rule)
+      );
       harness.countUnresolved();
       blockAndRecord(report, outputVerdict, { label, phase: 'output', executor: out.executor });
       continue;
@@ -1525,7 +1647,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   assert(gaz.length > 0, 'gazetteer loads');
 
   assert(normalizeText('Syābru-Besi!') === 'syabru besi', 'diacritics + punctuation normalized');
-  assert(trigramCosine('Syabrubesi', 'Syabrubensi') > 0.7, 'misspelling scores high on trigram cosine');
+  assert(
+    trigramCosine('Syabrubesi', 'Syabrubensi') > 0.7,
+    'misspelling scores high on trigram cosine'
+  );
   assert(trigramCosine('Betrawati', 'Gosaikunda') < 0.2, 'unrelated names score low');
 
   const reports = [
@@ -1585,12 +1710,21 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
 
   const out = await triage(reports, gaz);
   assert(out === reports, 'triage returns the same array it was given');
-  assert(out.every((r) => r.triage && CATEGORIES.includes(r.triage.category)), 'every report categorized');
+  assert(
+    out.every((r) => r.triage && CATEGORIES.includes(r.triage.category)),
+    'every report categorized'
+  );
 
   const r1 = out.find((r) => r.id === 'r1');
-  assert(r1.settlementId === 'np-nuwakot-betrawati', `r1 resolved to Betrawati (got ${r1.settlementId})`);
+  assert(
+    r1.settlementId === 'np-nuwakot-betrawati',
+    `r1 resolved to Betrawati (got ${r1.settlementId})`
+  );
   assert(r1.triage.tier === 1, 'r1 handled by tier 1');
-  assert(r1.triage.category === 'corroboration-candidate', `r1 is corroboration (got ${r1.triage.category})`);
+  assert(
+    r1.triage.category === 'corroboration-candidate',
+    `r1 is corroboration (got ${r1.triage.category})`
+  );
 
   const r2 = out.find((r) => r.id === 'r2');
   assert(

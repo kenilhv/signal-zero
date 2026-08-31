@@ -28,8 +28,13 @@
 // ---------------------------------------------------------------------------
 
 import {
-  makeScan, clip, uncoveredScripts, firstScriptSpan,
-  INVISIBLE_CHARS, BIDI_CONTROL_CHARS, TAG_CHAR_RE
+  makeScan,
+  clip,
+  uncoveredScripts,
+  firstScriptSpan,
+  INVISIBLE_CHARS,
+  BIDI_CONTROL_CHARS,
+  TAG_CHAR_RE
 } from './text.js';
 import { SEVERITY, violation, makeVerdict, internalErrorVerdict } from './verdict.js';
 
@@ -44,7 +49,8 @@ const STREAM_RULES = [
     id: 'injection.instruction-override',
     severity: SEVERITY.CRITICAL,
     re: /\b(ignore|disregard|forget|discard|override|bypass|skip|drop)\b(?:\s+\w+){0,4}?\s+\b(previous|prior|above|earlier|preceding|initial|original|all|any|the|your|system)\b(?:\s+\w+){0,3}?\s+\b(instruction|instructions|prompt|prompts|rule|rules|directive|directives|guideline|guidelines|guardrail|guardrails|constraint|constraints|context|training)\b/,
-    suggestion: 'Untrusted content tried to rewrite the task. Drop the document; do not show it to the model.'
+    suggestion:
+      'Untrusted content tried to rewrite the task. Drop the document; do not show it to the model.'
   },
   {
     // The rule above needs an anchor word (previous/prior/system/...) between the
@@ -54,7 +60,8 @@ const STREAM_RULES = [
     id: 'injection.instruction-override-paraphrase',
     severity: SEVERITY.HIGH,
     re: /\b(?:ignore|disregard|forget|put aside|set aside|leave aside|discard|override|never mind|pay no attention to)\b(?:\s+\w+){0,2}?\s+\b(?:everything|anything|whatever|all|what)\b(?:\s+\w+){0,3}?\s+\b(?:said|told|came|wrote|instructed|given|above|before|earlier|previously|prior)\b/,
-    suggestion: 'A paraphrased instruction override is still an instruction override. Drop the document.'
+    suggestion:
+      'A paraphrased instruction override is still an instruction override. Drop the document.'
   },
   {
     // The corpus is half non-English. An override written in Spanish, Portuguese,
@@ -65,7 +72,8 @@ const STREAM_RULES = [
     id: 'injection.instruction-override-nonenglish',
     severity: SEVERITY.HIGH,
     re: /\b(?:(?:ignora|ignore[nz]|ignorez|ignorier\w*|olvid\w+|esquec\w+|esqueca|oubli\w+|dimentic\w+|negeer|vergiss|vergessen|desconsider\w+|desatend\w+)\b(?:\s+\w+){0,4}?\s+\b(?:instruc\w+|instruction\w*|anweisung\w*|istruzion\w*|regla\w*|regra\w*|regeln?|regole|befehl\w*|prompt\w*)|(?:ignore|ignora|disregard|forget|olvida|oublie)\b(?:\s+\w+){0,4}?\s+\b(?:instrucciones|instrucoes|instrucao|instruccion|anweisungen|istruzioni|reglas|regras|regeln|regole)\b)/,
-    suggestion: 'An instruction override in another language is an instruction override. Drop the document.'
+    suggestion:
+      'An instruction override in another language is an instruction override. Drop the document.'
   },
   {
     id: 'injection.persona-escape',
@@ -77,28 +85,33 @@ const STREAM_RULES = [
     id: 'injection.agent-directive',
     severity: SEVERITY.HIGH,
     re: /\b(?:you (?:must|should|shall|will|need to|are required to|have to)|do not (?:tell|inform|mention|reveal|report|log)|never (?:tell|mention|reveal|log)|always (?:respond|reply|answer|output|return)|respond only with|reply only with|answer only with|output the following|print the following|return the following|say exactly|word for word|set the (?:field|value|category|status|flag)|mark (?:this|it) as|classify (?:this|it) as|label (?:this|it) as|treat (?:this|it) as|rate (?:this|it) as)\b/,
-    suggestion: 'Instruction-shaped text inside an article body is an injection attempt, not content.',
+    suggestion:
+      'Instruction-shaped text inside an article body is an injection attempt, not content.',
     // Scraped pages are full of consent/JS boilerplate that begins "you must".
     // Suppressing those is what keeps this rule usable on real web data.
-    except: /\byou (?:must|should|need to|have to)\s+(?:\w+\s+){0,2}(?:enable|allow|accept|update|login|log in|sign in|register|subscribe|upgrade|verify your email|javascript|cookies|browser|be logged)\b/
+    except:
+      /\byou (?:must|should|need to|have to)\s+(?:\w+\s+){0,2}(?:enable|allow|accept|update|login|log in|sign in|register|subscribe|upgrade|verify your email|javascript|cookies|browser|be logged)\b/
   },
   {
     id: 'injection.exfiltration',
     severity: SEVERITY.CRITICAL,
     re: /\b(?:reveal|show|print|repeat|output|display|disclose|leak|dump|forward|email|post|upload|send|paste|copy|share|transmit)\b(?:\s+\w+){0,4}?\s+\b(?:system prompt|your prompt|your instructions|your rules|your guidelines|the prompt above|everything above|the text above|api key|secret key|access token|credentials|environment variables)\b/,
-    suggestion: 'Untrusted content asked for the system prompt or credentials. Drop the document and keep the incident.'
+    suggestion:
+      'Untrusted content asked for the system prompt or credentials. Drop the document and keep the incident.'
   },
   {
     id: 'injection.tool-abuse',
     severity: SEVERITY.CRITICAL,
     re: /\b(?:call(?:ing)? the (?:\w+ ){0,3}(?:tool|function|api)|use the (?:\w+ ){0,3}tool|invoke the (?:\w+ ){0,3}(?:tool|function)|execute the following|run the following|run this (?:command|code|script)|eval this|open the url|fetch the url|make a (?:request|post) to|send (?:the|all|this) (?:data|results|reports|list) to)\b/,
-    suggestion: 'Untrusted content tried to drive tool use. Drop the document; tool selection is never content-controlled.'
+    suggestion:
+      'Untrusted content tried to drive tool use. Drop the document; tool selection is never content-controlled.'
   },
   {
     id: 'injection.forged-authority',
     severity: SEVERITY.HIGH,
     re: /\b(?:system override|admin(?:istrator)? override|security override|priority override|this (?:message|instruction) is from (?:the )?(?:system|developer|operator|admin|anthropic|openai)|authoriz?ed by (?:the )?(?:system|developer|admin|anthropic|openai)|new system message|updated system prompt|end of (?:user )?(?:input|document) new instructions|you (?:have been|are) granted (?:full )?(?:permission|access|authority))\b/,
-    suggestion: 'Untrusted content claimed operator authority. Authority never arrives inside scraped text.'
+    suggestion:
+      'Untrusted content claimed operator authority. Authority never arrives inside scraped text.'
   },
   {
     id: 'injection.output-shaping',
@@ -115,10 +128,25 @@ const STREAM_RULES = [
 
 /** Chat-template / turn-boundary tokens. Nothing legitimate emits these. */
 const TEMPLATE_TOKENS = [
-  '<|im_start|>', '<|im_end|>', '<|endoftext|>', '<|system|>', '<|user|>',
-  '<|assistant|>', '<|eot_id|>', '<|start_header_id|>', '[INST]', '[/INST]',
-  '<<SYS>>', '<</SYS>>', '### Instruction:', '### System:', '### Response:',
-  '<system>', '</system>', '<|channel|>', '<|message|>'
+  '<|im_start|>',
+  '<|im_end|>',
+  '<|endoftext|>',
+  '<|system|>',
+  '<|user|>',
+  '<|assistant|>',
+  '<|eot_id|>',
+  '<|start_header_id|>',
+  '[INST]',
+  '[/INST]',
+  '<<SYS>>',
+  '<</SYS>>',
+  '### Instruction:',
+  '### System:',
+  '### Response:',
+  '<system>',
+  '</system>',
+  '<|channel|>',
+  '<|message|>'
 ];
 
 const ROLE_MARKER_RE =
@@ -132,7 +160,8 @@ const HIDDEN_INSTRUCTION_RE =
   /\b(ignore|disregard|forget|you must|you are|act as|system prompt|respond|reply|output|classify|instructions?|prompt)\b/i;
 
 const BASE64_BLOB_RE = /[A-Za-z0-9+/]{40,}={0,2}/g;
-const DECODE_CONTEXT_RE = /\b(base64|b64|decode|atob|decrypt|rot13|obfuscat|encoded (?:instruction|prompt|message)|following string)\b/i;
+const DECODE_CONTEXT_RE =
+  /\b(base64|b64|decode|atob|decrypt|rot13|obfuscat|encoded (?:instruction|prompt|message)|following string)\b/i;
 
 function scanTemplateTokens(raw, out) {
   const lower = raw.toLowerCase();
@@ -265,7 +294,8 @@ function scanEncodedPayload(raw, out) {
         severity: SEVERITY.HIGH,
         matched: clip(m[0], 60),
         span: { start: m.index, end: m.index + m[0].length },
-        suggestion: 'An encoded blob presented for decoding is a payload, not content. Drop the document.',
+        suggestion:
+          'An encoded blob presented for decoding is a payload, not content. Drop the document.',
         pass: 'raw',
         evidence: { length: m[0].length }
       })
@@ -284,13 +314,27 @@ function scanEncodedPayload(raw, out) {
 // ---------------------------------------------------------------------------
 
 const NE_OVERRIDE_STEMS = [
-  'बेवास्ता', 'बेवास्ता', 'नजरअन्दाज', 'अनदेखा', 'बिर्स', 'भुल', 'रद्द',
-  'उल्लङ्घन', 'खारेज'
+  'बेवास्ता',
+  'बेवास्ता',
+  'नजरअन्दाज',
+  'अनदेखा',
+  'बिर्स',
+  'भुल',
+  'रद्द',
+  'उल्लङ्घन',
+  'खारेज'
 ];
 
 const NE_INSTRUCTION_NOUNS = [
-  'निर्देशन', 'निर्देशिका', 'नियम', 'आदेश', 'प्रम्प्ट', 'प्रोम्प्ट',
-  'सिस्टम', 'प्रणाली', 'हुकुम'
+  'निर्देशन',
+  'निर्देशिका',
+  'नियम',
+  'आदेश',
+  'प्रम्प्ट',
+  'प्रोम्प्ट',
+  'सिस्टम',
+  'प्रणाली',
+  'हुकुम'
 ];
 
 /** "you are now ...", "from now on you ..." - persona reassignment in Nepali. */
@@ -332,7 +376,8 @@ function scanDevanagariInjection(raw, out) {
         severity: SEVERITY.CRITICAL,
         matched: clip(text.slice(idx, idx + NE_WINDOW)),
         span: { start: idx, end: Math.min(text.length, idx + phrase.length) },
-        suggestion: 'Untrusted content tried to reassign the model a persona, in Devanagari. Drop the document.',
+        suggestion:
+          'Untrusted content tried to reassign the model a persona, in Devanagari. Drop the document.',
         pass: 'raw',
         evidence: { script: 'devanagari', phrase }
       })
@@ -443,7 +488,11 @@ export function checkInjection(text, options = {}) {
       checks: ['injection'],
       violations,
       suppressed: [],
-      stats: { chars: raw.length, tokens: scan.tokens.length, sourceName: options.sourceName || null }
+      stats: {
+        chars: raw.length,
+        tokens: scan.tokens.length,
+        sourceName: options.sourceName || null
+      }
     });
   } catch (err) {
     return internalErrorVerdict(stage, err, ['injection']);

@@ -68,7 +68,10 @@ test('a prompt-injected scraped report is blocked BEFORE the model, and recorded
 });
 
 test('a clean report reaching tier 3 is not blocked by the guardrail', async () => {
-  const clean = residualReport('r-clean', 'Officials continued monitoring the river through the night.');
+  const clean = residualReport(
+    'r-clean',
+    'Officials continued monitoring the river through the night.'
+  );
   await triage([clean], null);
 
   assert.ok(clean.triage, 'the report is still triaged');

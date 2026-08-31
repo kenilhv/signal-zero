@@ -15,8 +15,12 @@ const outPath = process.argv[2];
 
 const { triage } = await import(new URL('../../src/pipeline/triage.js', import.meta.url));
 const { dedup } = await import(new URL('../../src/pipeline/dedup.js', import.meta.url));
-const { rank, qualifiesForEscalation } = await import(new URL('../../src/pipeline/rank.js', import.meta.url));
-const { createEscalation } = await import(new URL('../../src/pipeline/checkpoint.js', import.meta.url));
+const { rank, qualifiesForEscalation } = await import(
+  new URL('../../src/pipeline/rank.js', import.meta.url)
+);
+const { createEscalation } = await import(
+  new URL('../../src/pipeline/checkpoint.js', import.meta.url)
+);
 const { store } = await import(new URL('../../src/store.js', import.meta.url));
 
 const gazetteer = JSON.parse(
@@ -65,7 +69,11 @@ fs.writeFileSync(
       survived: threw === null,
       threw,
       stages,
-      incidents: store.incidents.map((i) => ({ kind: i.kind, message: i.message, detail: i.detail }))
+      incidents: store.incidents.map((i) => ({
+        kind: i.kind,
+        message: i.message,
+        detail: i.detail
+      }))
     },
     null,
     2

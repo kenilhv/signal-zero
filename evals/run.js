@@ -34,7 +34,10 @@ const opts = {
   verbose: has('--verbose'),
   strict: has('--strict'),
   allowDocker: !has('--no-docker') && !has('--offline'),
-  trueforgeUrl: (val('--trueforge', process.env.TRUEFORGE_BASE_URL || 'http://localhost:4000')).replace(/\/+$/, ''),
+  trueforgeUrl: val(
+    '--trueforge',
+    process.env.TRUEFORGE_BASE_URL || 'http://localhost:4000'
+  ).replace(/\/+$/, ''),
   dockerContainer: val('--container', 'tforge'),
   basePort: Number(val('--port', '3199'))
 };
@@ -42,7 +45,8 @@ const opts = {
 // Every family must run against a KNOWN configuration, not against whatever
 // .env happens to hold. These are set before any src/ module is imported.
 process.env.USE_LIVE_SCRAPE = process.env.EVAL_ALLOW_LIVE_SCRAPE === '1' ? 'true' : 'false';
-process.env.BRIGHTDATA_API_TOKEN = process.env.EVAL_ALLOW_LIVE_SCRAPE === '1' ? process.env.BRIGHTDATA_API_TOKEN || '' : '';
+process.env.BRIGHTDATA_API_TOKEN =
+  process.env.EVAL_ALLOW_LIVE_SCRAPE === '1' ? process.env.BRIGHTDATA_API_TOKEN || '' : '';
 process.env.OPENAI_API_KEY = '';
 process.env.TRUEFORGE_ENABLED = 'false';
 
@@ -56,7 +60,11 @@ async function probeTrueforge(url) {
     const models = (json?.data || []).map((m) => m?.name).filter(Boolean);
     const want = process.env.EVAL_TRUEFORGE_MODEL || 'nebius/signal-zero-triage';
     if (!models.includes(want)) {
-      return { reachable: false, reason: `model "${want}" not registered (have: ${models.join(', ') || 'none'})`, models };
+      return {
+        reachable: false,
+        reason: `model "${want}" not registered (have: ${models.join(', ') || 'none'})`,
+        models
+      };
     }
     return { reachable: true, reason: null, models };
   } catch (err) {
@@ -70,8 +78,16 @@ const tf = await probeTrueforge(opts.trueforgeUrl);
 
 console.log('');
 console.log(C.bold('  SIGNAL ZERO - EVALUATION SUITE'));
-console.log(C.dim(`  families: ${opts.families}   trueforge: ${opts.trueforgeUrl} -> ${tf.reachable ? 'reachable' : `UNREACHABLE (${tf.reason})`}`));
-console.log(C.dim(`  docker: ${opts.allowDocker ? `enabled (container "${opts.dockerContainer}")` : 'disabled'}   strict: ${opts.strict}`));
+console.log(
+  C.dim(
+    `  families: ${opts.families}   trueforge: ${opts.trueforgeUrl} -> ${tf.reachable ? 'reachable' : `UNREACHABLE (${tf.reason})`}`
+  )
+);
+console.log(
+  C.dim(
+    `  docker: ${opts.allowDocker ? `enabled (container "${opts.dockerContainer}")` : 'disabled'}   strict: ${opts.strict}`
+  )
+);
 if (!tf.reachable) {
   console.log(
     C.yellow(
@@ -85,7 +101,10 @@ let port = opts.basePort;
 
 if (opts.families.includes('A')) {
   const { runFamilyA } = await import('./families/a-golden-set.js');
-  const { suite } = await runFamilyA({ trueforgeUrl: opts.trueforgeUrl, harnessReachable: tf.reachable });
+  const { suite } = await runFamilyA({
+    trueforgeUrl: opts.trueforgeUrl,
+    harnessReachable: tf.reachable
+  });
   suites.push(suite);
   renderSuite(suite, opts);
 }
@@ -132,15 +151,20 @@ console.log(C.bold('  SUMMARY'));
 for (const s of suites) {
   const x = s.summary();
   const tag = x.fail ? C.red('FAIL') : x.skip ? C.yellow('PART') : C.green(' OK ');
-  console.log(`  ${tag}  ${s.family.padEnd(36)} ${x.pass}/${x.total} pass, ${x.fail} fail, ${x.skip} skip`);
+  console.log(
+    `  ${tag}  ${s.family.padEnd(36)} ${x.pass}/${x.total} pass, ${x.fail} fail, ${x.skip} skip`
+  );
 }
 console.log('');
-console.log(`  ${passed.length} passed, ${failed.length} failed (${criticalFails.length} critical), ${skipped.length} skipped`);
+console.log(
+  `  ${passed.length} passed, ${failed.length} failed (${criticalFails.length} critical), ${skipped.length} skipped`
+);
 
 if (failed.length) {
   console.log('');
   console.log(C.red('  FAILURES'));
-  for (const f of failed) console.log(`    ${f.severity.toUpperCase().padEnd(8)} ${f.id}  ${f.name}`);
+  for (const f of failed)
+    console.log(`    ${f.severity.toUpperCase().padEnd(8)} ${f.id}  ${f.name}`);
 }
 if (skipped.length) {
   console.log('');
@@ -186,7 +210,9 @@ console.log(C.dim(`  machine-readable report: ${reportPath}`));
 const exitCode = failed.length > 0 || (opts.strict && skipped.length > 0) ? 1 : 0;
 console.log(
   exitCode === 0
-    ? C.green(`  RESULT: pass${skipped.length ? ` (with ${skipped.length} skipped - re-run with --strict to treat those as failures)` : ''}`)
+    ? C.green(
+        `  RESULT: pass${skipped.length ? ` (with ${skipped.length} skipped - re-run with --strict to treat those as failures)` : ''}`
+      )
     : C.red(`  RESULT: fail`)
 );
 console.log('');

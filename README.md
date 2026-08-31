@@ -40,6 +40,57 @@ settlements along the corridor from Timure down to Benighat.
 
 ---
 
+## Two measurements this project publishes against itself
+
+Both are inconvenient. They are here because a claim nobody can check is not
+evidence, and because the interesting number is usually the one you would rather
+not print.
+
+### The LLM tier is currently not earning its keep
+
+Triage runs in three tiers: a deterministic rule table, a deterministic
+embedding/alias matcher, and — only for what those two cannot settle — one LLM
+call. The eval suite scores the **same 32 hand-labelled reports twice, in two
+separate processes**: once with the LLM tier disabled entirely, once with it live
+through the TrueForge harness and no fallback path that could be mistaken for it.
+
+| | tiers 1+2 only | with live tier 3 |
+|---|---|---|
+| harm-weighted error rate *(lower is better)* | **0.1875** | **0.1875** |
+| category accuracy | 1.0000 | 0.9688 |
+
+On the most recent full run the LLM tier **fixed 0 errors and introduced 0**, and
+category accuracy went *down* slightly. The deterministic tiers had already
+resolved everything resolvable on this set.
+
+That is a result about the value of the model on this task, not a defect in the
+harness that executed it — and it is the reason tier 3 stays a *fallback* rather
+than the pipeline's spine. The generated scorecard, including the run this came
+from, lives in [`evals/README.md`](evals/README.md) and is regenerated from
+`evals/report/latest.json` rather than typed by hand.
+
+### The build step would not have been the thing that made this fast
+
+The frontend is vanilla ES modules with no bundler — a decision, not an omission
+([ADR-002](docs/ARCHITECTURE-DECISIONS.md)). The usual objection is payload size,
+so here is the payload, gzipped, measured on the committed tree:
+
+| | gzipped |
+|---|---|
+| `app.js` + `map.js` + `lib.js` + `styles.css` + `index.html` | **84.2 KB** |
+| MapLibre GL (vendored, third-party) | **287.6 KB** |
+| **total** | **369.9 KB** — MapLibre is **77.8%** of it |
+
+Reproduce it: `gzip -c web/app.js | wc -c`, and so on across the five files.
+
+A bundler would minify the 84 KB of hand-written source. Over gzip that saving is
+a small fraction of a payload already dominated by a third-party map engine that
+ships pre-minified. The honest conclusion is not "builds are bad" — it is that on
+*this* project the build step is not where the bytes are, and choosing it would
+have bought tooling rather than speed.
+
+---
+
 ## Run it
 
 ```bash
@@ -325,4 +376,7 @@ trueforge.yaml       TrueForge harness catalog
 
 ## License
 
-MIT.
+MIT — see [`LICENSE`](LICENSE).
+
+Third-party code vendored into this repository keeps its own licence: MapLibre GL
+JS under `web/vendor/` is BSD-3-Clause.

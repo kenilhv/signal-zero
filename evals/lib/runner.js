@@ -132,7 +132,8 @@ export { C };
 
 export function renderSuite(suite, { verbose = false } = {}) {
   const s = suite.summary();
-  const head = `${suite.family}  ${s.pass}/${s.total} pass` +
+  const head =
+    `${suite.family}  ${s.pass}/${s.total} pass` +
     (s.fail ? `, ${s.fail} FAIL` : '') +
     (s.skip ? `, ${s.skip} skipped` : '');
   console.log('');

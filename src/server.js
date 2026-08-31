@@ -82,7 +82,8 @@ function pick(mod, names) {
   if (!mod) return null;
   for (const n of names) {
     if (typeof mod[n] === 'function') return mod[n];
-    if (mod.default && typeof mod.default[n] === 'function') return mod.default[n].bind(mod.default);
+    if (mod.default && typeof mod.default[n] === 'function')
+      return mod.default[n].bind(mod.default);
   }
   if (typeof mod.default === 'function') return mod.default;
   return null;
@@ -121,7 +122,12 @@ function fallbackEscalationGate(s) {
 
 export async function runPipeline() {
   if (running) {
-    return { ok: false, error: 'A pipeline pass is already running.', reportCount: store.reports.length, durationMs: 0 };
+    return {
+      ok: false,
+      error: 'A pipeline pass is already running.',
+      reportCount: store.reports.length,
+      durationMs: 0
+    };
   }
   running = true;
   const started = Date.now();
@@ -133,31 +139,56 @@ export async function runPipeline() {
 
     // --- 1. INGEST -------------------------------------------------------
     let reports = store.reports;
-    const ingestFn = pick(stageModules.ingest, ['ingest', 'runIngest', 'ingestReports', 'fetchReports']);
+    const ingestFn = pick(stageModules.ingest, [
+      'ingest',
+      'runIngest',
+      'ingestReports',
+      'fetchReports'
+    ]);
     if (ingestFn) {
       try {
         reports = asReports(await ingestFn(store.settlements, config), []);
       } catch (err) {
-        addIncident('degraded-source', `Ingest failed: ${err.message}`, { stage: 'ingest', error: err.message });
+        addIncident('degraded-source', `Ingest failed: ${err.message}`, {
+          stage: 'ingest',
+          error: err.message
+        });
         reports = [];
       }
     }
     store.reports = Array.isArray(reports) ? reports : [];
 
     // --- 2. TRIAGE -------------------------------------------------------
-    const triageFn = pick(stageModules.triage, ['triage', 'runTriage', 'triageReports', 'classify']);
+    const triageFn = pick(stageModules.triage, [
+      'triage',
+      'runTriage',
+      'triageReports',
+      'classify'
+    ]);
     if (triageFn) {
       try {
-        store.reports = asReports(await triageFn(store.reports, store.settlements, config), store.reports);
+        store.reports = asReports(
+          await triageFn(store.reports, store.settlements, config),
+          store.reports
+        );
       } catch (err) {
-        addIncident('degraded-source', `Triage failed: ${err.message}`, { stage: 'triage', error: err.message });
+        addIncident('degraded-source', `Triage failed: ${err.message}`, {
+          stage: 'triage',
+          error: err.message
+        });
       }
     }
 
     // --- 3. DEDUP --------------------------------------------------------
     // Deterministic Fellegi-Sunter. No LLM here, by design.
     let ambiguousPairs = [];
-    const dedupFn = pick(stageModules.dedup, ['dedup', 'runDedup', 'dedupe', 'cluster', 'clusterReports']);
+    const dedupFn = pick(stageModules.dedup, [
+      'dedup',
+      'runDedup',
+      'dedupe',
+      'cluster',
+      'clusterReports'
+    ]);
     if (dedupFn) {
       try {
         const result = await dedupFn(store.reports, store.settlements, config);
@@ -167,10 +198,17 @@ export async function runPipeline() {
           if (Array.isArray(result.clusters)) store.clusters = result.clusters;
           store.reports = asReports(result, store.reports);
           ambiguousPairs =
-            result.ambiguous || result.ambiguousPairs || result.ambiguousMatches || result.pending || [];
+            result.ambiguous ||
+            result.ambiguousPairs ||
+            result.ambiguousMatches ||
+            result.pending ||
+            [];
         }
       } catch (err) {
-        addIncident('degraded-source', `Dedup failed: ${err.message}`, { stage: 'dedup', error: err.message });
+        addIncident('degraded-source', `Dedup failed: ${err.message}`, {
+          stage: 'dedup',
+          error: err.message
+        });
       }
     }
     if (!Array.isArray(store.clusters)) store.clusters = [];
@@ -189,7 +227,10 @@ export async function runPipeline() {
         else if (result && Array.isArray(result.ranked)) store.ranked = result.ranked;
         else if (result && Array.isArray(result.settlements)) store.ranked = result.settlements;
       } catch (err) {
-        addIncident('degraded-source', `Rank failed: ${err.message}`, { stage: 'rank', error: err.message });
+        addIncident('degraded-source', `Rank failed: ${err.message}`, {
+          stage: 'rank',
+          error: err.message
+        });
       }
     }
     if (!Array.isArray(store.ranked)) store.ranked = [];
@@ -243,10 +284,14 @@ export async function runPipeline() {
           }
         });
       } catch (err) {
-        addIncident('degraded-source', `Could not raise escalation for ${s.settlementId}: ${err.message}`, {
-          settlementId: s.settlementId,
-          error: err.message
-        });
+        addIncident(
+          'degraded-source',
+          `Could not raise escalation for ${s.settlementId}: ${err.message}`,
+          {
+            settlementId: s.settlementId,
+            error: err.message
+          }
+        );
       }
     }
 
@@ -258,7 +303,9 @@ export async function runPipeline() {
           evidence: pair
         });
       } catch (err) {
-        addIncident('degraded-source', `Could not hold ambiguous match: ${err.message}`, { error: err.message });
+        addIncident('degraded-source', `Could not hold ambiguous match: ${err.message}`, {
+          error: err.message
+        });
       }
     }
 
@@ -279,7 +326,12 @@ export async function runPipeline() {
       tier3: harnessSummary()
     };
 
-    return { ok: true, reportCount: store.reports.length, clusterCount: store.clusters.length, durationMs };
+    return {
+      ok: true,
+      reportCount: store.reports.length,
+      clusterCount: store.clusters.length,
+      durationMs
+    };
   } finally {
     running = false;
   }
@@ -373,8 +425,18 @@ function pairLabel(candidate, label, id, fallback) {
 }
 
 function describePair(pair) {
-  const a = pairLabel(pair.a, pair.leftLabel || pair.aLabel, pair.leftId || pair.aId, 'candidate A');
-  const b = pairLabel(pair.b, pair.rightLabel || pair.bLabel, pair.rightId || pair.bId, 'candidate B');
+  const a = pairLabel(
+    pair.a,
+    pair.leftLabel || pair.aLabel,
+    pair.leftId || pair.aId,
+    'candidate A'
+  );
+  const b = pairLabel(
+    pair.b,
+    pair.rightLabel || pair.bLabel,
+    pair.rightId || pair.bId,
+    'candidate B'
+  );
   const p = pair.matchProbability ?? pair.probability ?? pair.p;
   const pct = Number.isFinite(Number(p)) ? ` (match p=${round(Number(p), 2)})` : '';
   return `Ambiguous match: ${a} vs ${b}${pct}`;
@@ -401,19 +463,27 @@ function simulateDegradedSource() {
   const names = Object.keys(store.sources || {});
   const name = names.find((n) => store.sources[n]?.status !== 'degraded') || names[0];
   if (!name) {
-    return addIncident('degraded-source', 'Connector health probe failed: no sources registered yet', {
-      simulated: true
-    });
+    return addIncident(
+      'degraded-source',
+      'Connector health probe failed: no sources registered yet',
+      {
+        simulated: true
+      }
+    );
   }
   const source = store.sources[name];
   const previousStatus = source.status;
   source.status = 'degraded';
-  const incident = addIncident('degraded-source', `Connector "${name}" stopped returning results - coverage is now partial`, {
-    simulated: true,
-    source: name,
-    sourceType: source.sourceType ?? null,
-    previousStatus
-  });
+  const incident = addIncident(
+    'degraded-source',
+    `Connector "${name}" stopped returning results - coverage is now partial`,
+    {
+      simulated: true,
+      source: name,
+      sourceType: source.sourceType ?? null,
+      previousStatus
+    }
+  );
 
   // Self-heal, so the fail feed shows recovery as well as failure.
   setTimeout(() => {
@@ -440,7 +510,11 @@ function simulateAmbiguousMatch() {
   // auto-merge line: the demo was holding up an item for human review that the
   // pipeline would have linked without asking. Exactly the kind of contradiction
   // this checkpoint exists to prevent.
-  const fn = findSimulator(['simulateAmbiguousPair', 'simulateAmbiguousMatch', 'simulateAmbiguous']);
+  const fn = findSimulator([
+    'simulateAmbiguousPair',
+    'simulateAmbiguousMatch',
+    'simulateAmbiguous'
+  ]);
   const pair = fn ? fn(store.reports) : null;
 
   if (!pair) {
@@ -489,9 +563,13 @@ function simulateColdStart() {
   const target =
     store.ranked.find((s) => s.coverageBasis !== 'cohort-cold-start') || store.ranked[0] || null;
   if (!target) {
-    return addIncident('cold-start', 'Cold-start settlement encountered before any ranking existed', {
-      simulated: true
-    });
+    return addIncident(
+      'cold-start',
+      'Cold-start settlement encountered before any ranking existed',
+      {
+        simulated: true
+      }
+    );
   }
   target.coverageBasis = 'cohort-cold-start';
   return addIncident(
@@ -598,9 +676,7 @@ app.get('/api/settlement/:id', (req, res) => {
 
   const reports = store.reports.filter((r) => r.settlementId === id);
   const clusterIds = new Set(reports.map((r) => r.clusterId).filter(Boolean));
-  const clusters = store.clusters.filter(
-    (c) => clusterIds.has(c.id) || c.settlementId === id
-  );
+  const clusters = store.clusters.filter((c) => clusterIds.has(c.id) || c.settlementId === id);
 
   res.json({
     ok: true,
@@ -659,14 +735,23 @@ app.post('/api/demo/fail/:kind', (req, res) => {
     if (kind === 'ambiguous') {
       const result = simulateAmbiguousMatch();
       if (result && result.incident) {
-        return res.json({ ok: true, incident: result.incident, checkpointItem: result.checkpointItem });
+        return res.json({
+          ok: true,
+          incident: result.incident,
+          checkpointItem: result.checkpointItem
+        });
       }
       return res.json({ ok: true, incident: result });
     }
     if (kind === 'coldstart' || kind === 'cold-start') {
       return res.json({ ok: true, incident: simulateColdStart() });
     }
-    res.status(400).json({ ok: false, error: `Unknown failure kind "${kind}". Use source | ambiguous | coldstart.` });
+    res
+      .status(400)
+      .json({
+        ok: false,
+        error: `Unknown failure kind "${kind}". Use source | ambiguous | coldstart.`
+      });
   } catch (err) {
     console.error('[signal-zero] demo failure error:', err);
     res.status(500).json({ ok: false, error: err.message });
@@ -724,7 +809,7 @@ async function start() {
       .catch((err) => {
         console.error('[signal-zero] boot pipeline failed (server still serving):', err.message);
         addIncident('degraded-source', `Boot pipeline pass failed: ${err.message}`, {
-          error: err.message,
+          error: err.message
         });
       });
   }
@@ -739,11 +824,15 @@ async function start() {
     console.log(`  ->  http://localhost:${port}`);
     console.log(`  ->  http://localhost:${port}/api/state`);
     console.log('');
-    console.log(`  settlements: ${store.settlements.length}   reports: ${store.reports.length}   ` +
-      `pending checkpoints: ${store.checkpoint.filter((i) => i.status === 'pending').length}`);
+    console.log(
+      `  settlements: ${store.settlements.length}   reports: ${store.reports.length}   ` +
+        `pending checkpoints: ${store.checkpoint.filter((i) => i.status === 'pending').length}`
+    );
     console.log('');
-    console.log(`  live scrape: ${config.USE_LIVE_SCRAPE ? 'ON' : 'off (bundled corpus)'} ` +
-      `- first ingest pass starting now, UI is already up`);
+    console.log(
+      `  live scrape: ${config.USE_LIVE_SCRAPE ? 'ON' : 'off (bundled corpus)'} ` +
+        `- first ingest pass starting now, UI is already up`
+    );
     console.log('');
     firstPass();
   });

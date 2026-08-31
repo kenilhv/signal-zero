@@ -156,11 +156,11 @@ function parseLooseDate(value) {
   if (!value) return null;
   const s = String(value).trim().toLowerCase();
 
-  const rel = /^(?:about\s+)?(\d+)\s*(second|sec|minute|min|hour|hr|day|week|month|year)s?\s+ago$/.exec(s);
+  const rel =
+    /^(?:about\s+)?(\d+)\s*(second|sec|minute|min|hour|hr|day|week|month|year)s?\s+ago$/.exec(s);
   if (rel) {
     const n = Number(rel[1]);
-    const unit =
-      { sec: 'second', min: 'minute', hr: 'hour' }[rel[2]] || rel[2];
+    const unit = { sec: 'second', min: 'minute', hr: 'hour' }[rel[2]] || rel[2];
     const ms = RELATIVE_UNITS_MS[unit];
     if (ms) return new Date(Date.now() - n * ms).toISOString();
   }
@@ -251,16 +251,30 @@ async function brightDataRequest(targetUrl, { zone = UNLOCKER_ZONE } = {}) {
 // ---------------------------------------------------------------------------
 
 const ENTITIES = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
-  '#39': "'", '#39;': "'", rsquo: '’', lsquo: '‘',
-  ldquo: '"', rdquo: '"', ndash: '–', mdash: '—', hellip: '…'
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  '#39': "'",
+  '#39;': "'",
+  rsquo: '’',
+  lsquo: '‘',
+  ldquo: '"',
+  rdquo: '"',
+  ndash: '–',
+  mdash: '—',
+  hellip: '…'
 };
 
 function decodeEntities(s) {
   return String(s)
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&([a-z]+);/gi, (m, n) => (ENTITIES[n.toLowerCase()] !== undefined ? ENTITIES[n.toLowerCase()] : m));
+    .replace(/&([a-z]+);/gi, (m, n) =>
+      ENTITIES[n.toLowerCase()] !== undefined ? ENTITIES[n.toLowerCase()] : m
+    );
 }
 
 function stripTags(html) {
@@ -289,7 +303,9 @@ function extractTitle(html) {
     /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i,
     /<h1[^>]*>([\s\S]{3,220}?)<\/h1>/i,
     /<title[^>]*>([\s\S]{3,220}?)<\/title>/i
-  ).replace(/\s*[|–-]\s*[^|–-]{0,40}$/, '').trim();
+  )
+    .replace(/\s*[|–-]\s*[^|–-]{0,40}$/, '')
+    .trim();
 }
 
 function extractPublishedAt(html) {
@@ -312,9 +328,7 @@ function extractBodyText(html) {
 
   // Prefer the article/main container when the page has one.
   const scoped =
-    /<article[\s\S]*?<\/article>/i.exec(html) ||
-    /<main[\s\S]*?<\/main>/i.exec(html) ||
-    null;
+    /<article[\s\S]*?<\/article>/i.exec(html) || /<main[\s\S]*?<\/main>/i.exec(html) || null;
   const region = scoped ? scoped[0] : html;
 
   const paragraphs = [];
@@ -356,8 +370,20 @@ function extractLinks(html, baseUrl, linkPattern) {
 // ---------------------------------------------------------------------------
 
 const EVENT_KEYWORDS = [
-  'trishuli', 'glof', 'glacial lake', 'outburst', 'flood', 'inundat', 'bagmati province',
-  'nuwakot', 'rasuwa', 'dhading', 'landslide', 'swept away', 'washed away', 'displaced'
+  'trishuli',
+  'glof',
+  'glacial lake',
+  'outburst',
+  'flood',
+  'inundat',
+  'bagmati province',
+  'nuwakot',
+  'rasuwa',
+  'dhading',
+  'landslide',
+  'swept away',
+  'washed away',
+  'displaced'
 ];
 
 let placeNeedlesCache = null;
@@ -367,7 +393,8 @@ function placeNeedles() {
   const set = new Set();
   for (const s of gaz) {
     if (s && s.name) set.add(String(s.name).toLowerCase());
-    for (const a of s && Array.isArray(s.aliases) ? s.aliases : []) set.add(String(a).toLowerCase());
+    for (const a of s && Array.isArray(s.aliases) ? s.aliases : [])
+      set.add(String(a).toLowerCase());
   }
   placeNeedlesCache = [...set];
   return placeNeedlesCache;
@@ -428,7 +455,9 @@ function normalizeReport(raw) {
   const url = String(raw.url || '').trim();
   const title = String(raw.title || '').trim();
   if (!url || !title) return null;
-  const sourceType = ['news', 'social', 'official'].includes(raw.sourceType) ? raw.sourceType : 'news';
+  const sourceType = ['news', 'social', 'official'].includes(raw.sourceType)
+    ? raw.sourceType
+    : 'news';
   const fetchedAt = isoOrNull(raw.fetchedAt) || new Date().toISOString();
   return {
     id: String(raw.id || reportId(url)),
@@ -599,7 +628,9 @@ async function runListingConnector(connector) {
 
 async function runConnector(connector) {
   const reports =
-    connector.kind === 'serp' ? await runSerpConnector(connector) : await runListingConnector(connector);
+    connector.kind === 'serp'
+      ? await runSerpConnector(connector)
+      : await runListingConnector(connector);
   return reports;
 }
 
@@ -669,10 +700,14 @@ export async function ingest() {
       return live.reports;
     }
 
-    addIncident('degraded-source', 'Every live connector failed - falling back to the offline corpus', {
-      connectors: CONNECTORS.map((c) => c.name),
-      fallback: 'src/data/seed-reports.json'
-    });
+    addIncident(
+      'degraded-source',
+      'Every live connector failed - falling back to the offline corpus',
+      {
+        connectors: CONNECTORS.map((c) => c.name),
+        fallback: 'src/data/seed-reports.json'
+      }
+    );
     store.sources = {};
   }
 

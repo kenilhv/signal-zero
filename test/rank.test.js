@@ -168,8 +168,7 @@ test('cohort fit is recovered end to end, shrunk toward the cohort prior', () =>
 
   const lambda0 = 1 / PRIOR_EXPECTED_GAP_HOURS; // tier 2, population 10,000
   const kGlobal = (PRIOR_STRENGTH_GAPS + 20) / (PRIOR_STRENGTH_GAPS / 1 + 20 * lambda0 * 3);
-  const kCohort =
-    (PRIOR_STRENGTH_GAPS + 20) / (PRIOR_STRENGTH_GAPS / kGlobal + 20 * lambda0 * 3);
+  const kCohort = (PRIOR_STRENGTH_GAPS + 20) / (PRIOR_STRENGTH_GAPS / kGlobal + 20 * lambda0 * 3);
   const expectedGap = 1 / (kCohort * lambda0);
   assert.ok(Math.abs(expectedGap - 3.1532) < 1e-3, `closed form drifted: ${expectedGap}`);
 
@@ -498,9 +497,22 @@ test('output satisfies the RankedSettlement contract', () => {
   const { settlements, reports, adjacency } = buildField(6, [1]);
   const ranked = rank(settlements, [], reports, NOW, { adjacency, emitIncidents: false });
   const required = [
-    'settlementId', 'name', 'district', 'lat', 'lon', 'population', 'hazardTier',
-    'lastReportAt', 'silenceHours', 'expectedGapHours', 'surprisal', 'giZScore',
-    'isLocalAnomaly', 'coverageBasis', 'rank', 'corroborationCount'
+    'settlementId',
+    'name',
+    'district',
+    'lat',
+    'lon',
+    'population',
+    'hazardTier',
+    'lastReportAt',
+    'silenceHours',
+    'expectedGapHours',
+    'surprisal',
+    'giZScore',
+    'isLocalAnomaly',
+    'coverageBasis',
+    'rank',
+    'corroborationCount'
   ];
   for (const row of ranked) {
     for (const key of required) assert.ok(key in row, `missing ${key}`);

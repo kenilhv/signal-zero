@@ -103,7 +103,8 @@ function turnState(mode, injectedText) {
             refusal: {
               rule: 'RULE 1 - NO DISPATCH',
               requested: 'add a recommendedAction naming where to send a team',
-              reason: 'the system never emits an assignment; that decision belongs to a human outside it'
+              reason:
+                'the system never emits an assignment; that decision belongs to a human outside it'
             }
           })
         },
@@ -138,8 +139,7 @@ function turnState(mode, injectedText) {
 export async function startStub(opts = {}) {
   const mode = opts.mode || 'healthy';
   const model = opts.model || 'nebius/signal-zero-triage';
-  const agentName =
-    opts.agentName || process.env.TRUEFORGE_AGENT || 'signal-zero-triage-tier3';
+  const agentName = opts.agentName || process.env.TRUEFORGE_AGENT || 'signal-zero-triage-tier3';
   const agentId = opts.agentId || '01stubagent0000000000000000';
   const delayMs = Number(opts.delayMs) || 0;
   const calls = [];
@@ -193,7 +193,8 @@ export async function startStub(opts = {}) {
       // The endpoint that decides whether the session binds BY NAME (what we
       // ship) or to an inline spec (the degraded path).
       if (p === '/api/v1/agents' && req.method === 'GET') {
-        if (mode === 'agents-500') return send(res, 500, { error: 'stub: agent registry unavailable' });
+        if (mode === 'agents-500')
+          return send(res, 500, { error: 'stub: agent registry unavailable' });
         if (mode === 'agent-missing') return send(res, 200, { data: [] });
         if (mode === 'agent-deleted-midrun' && agentDeleted) return send(res, 200, { data: [] });
         return send(res, 200, { data: [agentRow()] });
@@ -217,9 +218,7 @@ export async function startStub(opts = {}) {
           id: 'sess-stub-1',
           created_at: new Date().toISOString(),
           state: { status: 'idle' },
-          agent: named
-            ? { type: 'reference', id: agentId, name: agentName }
-            : { type: 'spec' }
+          agent: named ? { type: 'reference', id: agentId, name: agentName } : { type: 'spec' }
         });
       }
 

@@ -149,8 +149,10 @@ function parseScalar(raw) {
     if (inner === '') return [];
     return splitFlow(inner).map(parseScalar);
   }
-  if ((s.startsWith('"') && s.endsWith('"') && s.length > 1) ||
-      (s.startsWith("'") && s.endsWith("'") && s.length > 1)) {
+  if (
+    (s.startsWith('"') && s.endsWith('"') && s.length > 1) ||
+    (s.startsWith("'") && s.endsWith("'") && s.length > 1)
+  ) {
     return s.slice(1, -1);
   }
   if (/^-?\d+$/.test(s)) return Number.parseInt(s, 10);
@@ -257,7 +259,7 @@ function splitFrontmatter(text, file) {
   if (end === -1) throw new Error(`${file}: unterminated YAML frontmatter`);
   return {
     frontmatter: parseYaml(norm.slice(4, end + 1)),
-    prose: norm.slice(end + 5).trim(),
+    prose: norm.slice(end + 5).trim()
   };
 }
 
@@ -345,7 +347,9 @@ function toolSurface({ mcpServers, dynamicSubAgents, sandbox, role, toolCallBudg
       const enable = (s.enable_tools || ['@all']).join(', ');
       const approve = (s.require_approval_for_tools || ['@write', '@destructive']).join(', ');
       L.push(`- **MCP server \`${s.name}\`**`);
-      L.push(`  - Tools exposed to you: \`${enable}\`. Nothing outside that selector exists for you.`);
+      L.push(
+        `  - Tools exposed to you: \`${enable}\`. Nothing outside that selector exists for you.`
+      );
       L.push(
         `  - Human approval required for: \`${approve}\`. TrueForge PAUSES your turn ` +
           'on `tool.approval_required` and waits for a person to Allow or Deny.'
@@ -363,8 +367,8 @@ function toolSurface({ mcpServers, dynamicSubAgents, sandbox, role, toolCallBudg
     );
     L.push('');
     L.push(
-      '**The approval gate is not the named-approver rule.** TrueForge\'s gate ' +
-        'has no identity attached to the decision. Signal Zero\'s named-approver ' +
+      "**The approval gate is not the named-approver rule.** TrueForge's gate " +
+        "has no identity attached to the decision. Signal Zero's named-approver " +
         'guarantee (Rule 2) is enforced separately, in `src/server.js`. Never ' +
         'describe an allowed tool call as having been "approved by" anyone.'
     );
@@ -451,10 +455,10 @@ function buildInstructions({ standing, tf, prose, mcpServers }) {
       dynamicSubAgents: tf.dynamic_sub_agents === true,
       sandbox: tf.sandbox === true,
       role: tf.role || 'specialist',
-      toolCallBudget: tf.tool_call_budget || 0,
+      toolCallBudget: tf.tool_call_budget || 0
     }),
     '\n---\n',
-    prose.trim(),
+    prose.trim()
   ].join('\n');
 }
 
@@ -464,8 +468,8 @@ function buildManifest({ tf, instructions, skills }) {
       name: tf.model,
       params: {
         temperature: tf.temperature ?? 0,
-        max_tokens: tf.max_tokens ?? 2000,
-      },
+        max_tokens: tf.max_tokens ?? 2000
+      }
     },
     instructions,
     mcp_servers: Array.isArray(tf.mcp_servers) ? tf.mcp_servers : [],
@@ -478,17 +482,17 @@ function buildManifest({ tf, instructions, skills }) {
         // behind each per-agent number.
         compaction: {
           enabled: true,
-          compaction_threshold_tokens: tf.compaction_threshold_tokens ?? 50000,
+          compaction_threshold_tokens: tf.compaction_threshold_tokens ?? 50000
         },
-        large_tool_response: { enabled: tf.large_tool_response !== false },
+        large_tool_response: { enabled: tf.large_tool_response !== false }
       },
       // Signal Zero renders its own console. A model-drawn UI would be a second,
       // unaudited surface on which a dispatch instruction could appear.
       generative_ui: { enabled: false },
       // These agents must return their output contract or refuse — never stall a
       // pipeline pass waiting on an interactive answer.
-      ask_user_questions: { enabled: false },
-    },
+      ask_user_questions: { enabled: false }
+    }
   };
   if (skills.length > 0) manifest.skills = skills.map((name) => ({ name }));
   return manifest;
@@ -502,7 +506,7 @@ async function api(method, path, body) {
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? JSON.stringify(body) : undefined
   });
   const text = await res.text();
   let json = null;
@@ -647,11 +651,9 @@ function printTable(rows) {
     ['SUBAGENTS', 'sub'],
     ['COMPACT@', 'compact'],
     ['SKILLS', 'skills'],
-    ['ID', 'id'],
+    ['ID', 'id']
   ];
-  const w = cols.map(([h, k]) =>
-    Math.max(h.length, ...rows.map((r) => String(r[k] ?? '').length))
-  );
+  const w = cols.map(([h, k]) => Math.max(h.length, ...rows.map((r) => String(r[k] ?? '').length)));
   const line = (cells) => cells.map((c, i) => String(c ?? '').padEnd(w[i])).join('  ');
   console.log('');
   console.log(line(cols.map((c) => c[0])));
@@ -682,7 +684,9 @@ async function main() {
     }
     if (!tf.agent_name) throw new Error(`${file}: trueforge.agent_name is required`);
     if (!/^[a-z](?:[a-z0-9._-]{0,62}[a-z0-9])$/.test(tf.agent_name)) {
-      throw new Error(`${file}: agent_name "${tf.agent_name}" fails TrueForge ResourceName pattern`);
+      throw new Error(
+        `${file}: agent_name "${tf.agent_name}" fails TrueForge ResourceName pattern`
+      );
     }
     if (!tf.model) throw new Error(`${file}: trueforge.model is required`);
     defs.push({ file, tf, prose });
@@ -716,7 +720,11 @@ async function main() {
     let error = null;
 
     if (DRY_RUN) {
-      action = prior ? (declaredFieldsMatch(manifest, prior.manifest) ? 'unchanged*' : 'update*') : 'create*';
+      action = prior
+        ? declaredFieldsMatch(manifest, prior.manifest)
+          ? 'unchanged*'
+          : 'update*'
+        : 'create*';
     } else if (prior && declaredFieldsMatch(manifest, prior.manifest)) {
       action = 'unchanged';
     } else if (prior) {
@@ -741,16 +749,18 @@ async function main() {
       name: tf.agent_name,
       action,
       role: String(tf.role || '').split(' ')[0],
-      tools: mcpServers.length === 0 ? 'NONE' : mcpServers.map((s) => `${s.name}:${(s.enable_tools || ['@all']).join('|')}`).join(','),
-      approval: mcpServers.length === 0 ? '-' : mcpServers.map((s) => (s.require_approval_for_tools || []).join('|')).join(','),
+      tools:
+        mcpServers.length === 0
+          ? 'NONE'
+          : mcpServers.map((s) => `${s.name}:${(s.enable_tools || ['@all']).join('|')}`).join(','),
+      approval:
+        mcpServers.length === 0
+          ? '-'
+          : mcpServers.map((s) => (s.require_approval_for_tools || []).join('|')).join(','),
       sub: tf.dynamic_sub_agents === true ? 'yes' : 'no',
       compact: String(tf.compaction_threshold_tokens ?? 50000),
-      skills: skills.length
-        ? skills.join(',')
-        : matched.length
-          ? `(${matched.join(',')})`
-          : '-',
-      id,
+      skills: skills.length ? skills.join(',') : matched.length ? `(${matched.join(',')})` : '-',
+      id
     });
     results.push({
       file,
@@ -760,16 +770,20 @@ async function main() {
       instructionsChars: instructions.length,
       skills,
       skillsMatchedNotAttached: skillInfo.attach ? [] : matched,
-      error,
+      error
     });
   }
 
   if (AS_JSON) {
-    console.log(JSON.stringify({ baseUrl: BASE_URL, dryRun: DRY_RUN, skills: skillInfo, results }, null, 2));
+    console.log(
+      JSON.stringify({ baseUrl: BASE_URL, dryRun: DRY_RUN, skills: skillInfo, results }, null, 2)
+    );
   } else {
     console.log(`TrueForge: ${BASE_URL}${DRY_RUN ? '   [DRY RUN — nothing written]' : ''}`);
     console.log(`Definitions: ${AGENT_DIR} (${defs.length} agents)`);
-    console.log(`Standing context: ${STANDING_CONTEXT_FILE} (${standing.length} chars, prepended to all)`);
+    console.log(
+      `Standing context: ${STANDING_CONTEXT_FILE} (${standing.length} chars, prepended to all)`
+    );
     console.log(`Skills: ${skillInfo.note}`);
     if (skillInfo.available.length) console.log(`  registered: ${skillInfo.available.join(', ')}`);
     printTable(rows);

@@ -9,11 +9,38 @@
 //   4. The API being slow, unreachable or malformed never clears what is on screen.
 
 import {
-  $, $$, h, clear, fmtHours, fmtZ, fmtNum, fmtInt, fmtCount, fmtLambda,
-  relTime, clockTime, localFull, silStop, SIL_BANDS, anomalyOf, ANOMALY,
-  INCIDENT_KINDS, statusOf, coverageChip, safeLocal, fetchJson,
-  silenceKind, KINDS, groupByKind, STOPPED_AFTER_HOURS,
-  countUp, staggerStep, fmtDuration, fmtDurationWords, fmtPeople, reducedMotion
+  $,
+  $$,
+  h,
+  clear,
+  fmtHours,
+  fmtZ,
+  fmtNum,
+  fmtInt,
+  fmtCount,
+  fmtLambda,
+  relTime,
+  clockTime,
+  localFull,
+  silStop,
+  SIL_BANDS,
+  anomalyOf,
+  ANOMALY,
+  INCIDENT_KINDS,
+  statusOf,
+  coverageChip,
+  safeLocal,
+  fetchJson,
+  silenceKind,
+  KINDS,
+  groupByKind,
+  STOPPED_AFTER_HOURS,
+  countUp,
+  staggerStep,
+  fmtDuration,
+  fmtDurationWords,
+  fmtPeople,
+  reducedMotion
 } from './lib.js';
 import { createMapController } from './map.js';
 
@@ -26,7 +53,10 @@ import { createMapController } from './map.js';
 function isCitableUrl(u) {
   if (!u) return false;
   try {
-    return /^https?:$/i.test(new URL(String(u), document.baseURI).protocol) && /^https?:\/\//i.test(String(u).trim());
+    return (
+      /^https?:$/i.test(new URL(String(u), document.baseURI).protocol) &&
+      /^https?:\/\//i.test(String(u).trim())
+    );
   } catch {
     return false;
   }
@@ -54,7 +84,7 @@ const S = {
   running: false,
   runStartedAt: 0,
   showAllDecided: false,
-  releases: new Map(),  // settlementId -> { approvedBy, decidedAt, shortlist }
+  releases: new Map(), // settlementId -> { approvedBy, decidedAt, shortlist }
   adjacency: null
 };
 
@@ -91,9 +121,12 @@ function logLocal(message, detail) {
 
 function toast(message, kind = 'ok', ms = 6000) {
   const box = el.toasts;
-  const node = h('div', { class: `toast ${kind}` },
+  const node = h(
+    'div',
+    { class: `toast ${kind}` },
     h('span', {}, message),
-    h('button', { type: 'button', 'aria-label': 'Dismiss', onclick: () => node.remove() }, '✕'));
+    h('button', { type: 'button', 'aria-label': 'Dismiss', onclick: () => node.remove() }, '✕')
+  );
   box.append(node);
   while (box.children.length > 3) box.firstChild.remove();
   setTimeout(() => node.remove(), ms);
@@ -102,7 +135,11 @@ function toast(message, kind = 'ok', ms = 6000) {
 // ── API ────────────────────────────────────────────────────────────────────
 
 async function pollState() {
-  const res = await fetchJson('/api/state', {}, 10000).catch((err) => ({ ok: false, status: 0, netError: err }));
+  const res = await fetchJson('/api/state', {}, 10000).catch((err) => ({
+    ok: false,
+    status: 0,
+    netError: err
+  }));
 
   if (!res.ok) {
     S.stale = true;
@@ -130,8 +167,10 @@ async function pollState() {
   if (wasStale) logLocal('Reconnected to the Signal Zero API. Live state restored.');
 
   if (prev && prev.stats.lastRunAt !== S.state.stats.lastRunAt && S.state.stats.lastRunAt) {
-    logLocal(`Pipeline pass completed: ${S.state.stats.reportCount} reports, ${S.state.stats.clusterCount} clusters, ${S.state.stats.durationMs}ms.`,
-      { lastRunAt: S.state.stats.lastRunAt, durationMs: S.state.stats.durationMs });
+    logLocal(
+      `Pipeline pass completed: ${S.state.stats.reportCount} reports, ${S.state.stats.clusterCount} clusters, ${S.state.stats.durationMs}ms.`,
+      { lastRunAt: S.state.stats.lastRunAt, durationMs: S.state.stats.durationMs }
+    );
   }
   renderAll();
 }
@@ -148,9 +187,14 @@ function normalise(body) {
 }
 
 function loopPoll() {
-  const delay = S.stale ? S.retryMs : (S.running ? 1200 : 5000);
+  const delay = S.stale ? S.retryMs : S.running ? 1200 : 5000;
   setTimeout(async () => {
-    try { await pollState(); } catch (err) { S.stale = true; renderApiBanner(null); }
+    try {
+      await pollState();
+    } catch (err) {
+      S.stale = true;
+      renderApiBanner(null);
+    }
     loopPoll();
   }, delay);
 }
@@ -162,9 +206,16 @@ function loopPoll() {
 const minuteBucket = () => Math.floor(Date.now() / 60000);
 
 const rows = () => (S.state ? S.state.settlements : []);
-const pendingItems = () => (S.state ? S.state.checkpoint.filter((i) => i.status === 'pending') : []);
-const decidedItems = () => (S.state ? S.state.checkpoint.filter((i) => i.status !== 'pending') : []);
-const pendingSettlementIds = () => new Set(pendingItems().map((i) => i.settlementId).filter(Boolean));
+const pendingItems = () =>
+  S.state ? S.state.checkpoint.filter((i) => i.status === 'pending') : [];
+const decidedItems = () =>
+  S.state ? S.state.checkpoint.filter((i) => i.status !== 'pending') : [];
+const pendingSettlementIds = () =>
+  new Set(
+    pendingItems()
+      .map((i) => i.settlementId)
+      .filter(Boolean)
+  );
 const rowById = (id) => rows().find((r) => r.settlementId === id) || null;
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -179,24 +230,44 @@ function renderApiBanner(reason) {
   // The finding must say straight away that it is no longer being updated —
   // waiting for the next render tick would leave a stale sentence looking live.
   if (el.finding) renderFinding();
-  if (!S.stale) { b.hidden = true; clear(b); return; }
+  if (!S.stale) {
+    b.hidden = true;
+    clear(b);
+    return;
+  }
   clear(b);
   b.hidden = false;
   const seen = S.fetchedAt ? relTime(new Date(S.fetchedAt).toISOString()) : null;
   if (reason === 'malformed') {
     b.append(
       h('strong', {}, 'The API returned a response this console could not read.'),
-      h('span', {}, seen ? ` Showing the last state received ${seen}.` : ' No usable state has arrived yet.'),
-      h('details', {}, h('summary', {}, 'Show the first 400 characters'),
-        h('pre', { class: 'raw' }, S.parseSample || '(empty body)')));
+      h(
+        'span',
+        {},
+        seen ? ` Showing the last state received ${seen}.` : ' No usable state has arrived yet.'
+      ),
+      h(
+        'details',
+        {},
+        h('summary', {}, 'Show the first 400 characters'),
+        h('pre', { class: 'raw' }, S.parseSample || '(empty body)')
+      )
+    );
   } else {
     b.append(
       h('strong', {}, 'Cannot reach the Signal Zero API.'),
-      h('span', {}, seen
-        ? ` Showing the last state received ${seen}. Retrying in ${Math.round(S.retryMs / 1000)}s.`
-        : ` No state has arrived yet. Retrying in ${Math.round(S.retryMs / 1000)}s.`));
+      h(
+        'span',
+        {},
+        seen
+          ? ` Showing the last state received ${seen}. Retrying in ${Math.round(S.retryMs / 1000)}s.`
+          : ` No state has arrived yet. Retrying in ${Math.round(S.retryMs / 1000)}s.`
+      )
+    );
   }
-  b.append(h('button', { type: 'button', class: 'btn btn-sm', onclick: () => pollState() }, 'Retry now'));
+  b.append(
+    h('button', { type: 'button', class: 'btn btn-sm', onclick: () => pollState() }, 'Retry now')
+  );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -239,9 +310,12 @@ function renderFinding() {
   if (!S.state) {
     if (findingShape !== 'boot') {
       findingShape = 'boot';
-      clear(line); clear(bLine);
-      line.append(h('span', { class: 'skel skel-finding', 'aria-hidden': 'true' }),
-        h('span', { class: 'vh' }, 'Waiting for the first state from the console API.'));
+      clear(line);
+      clear(bLine);
+      line.append(
+        h('span', { class: 'skel skel-finding', 'aria-hidden': 'true' }),
+        h('span', { class: 'vh' }, 'Waiting for the first state from the console API.')
+      );
       bLine.className = 'finding-b is-none';
     }
     note.className = 'finding-note';
@@ -253,17 +327,21 @@ function renderFinding() {
   if (!all.length) {
     if (findingShape !== 'nodata') {
       findingShape = 'nodata';
-      clear(line); clear(bLine);
+      clear(line);
+      clear(bLine);
       line.append('No settlement has been scored yet.');
       bLine.className = 'finding-b is-none';
-      bLine.textContent = 'The first pass has to reach the sources, resolve reports to places and fit ' +
+      bLine.textContent =
+        'The first pass has to reach the sources, resolve reports to places and fit ' +
         'a baseline before anything can be ranked.';
     }
     note.className = 'finding-note';
     clear(note);
-    note.append(S.running
-      ? h('span', {}, h('span', { class: 'runmark', 'aria-hidden': 'true' }), 'Pass running…')
-      : h('span', {}, 'No pipeline pass has completed.'));
+    note.append(
+      S.running
+        ? h('span', {}, h('span', { class: 'runmark', 'aria-hidden': 'true' }), 'Pass running…')
+        : h('span', {}, 'No pipeline pass has completed.')
+    );
     return;
   }
 
@@ -285,18 +363,31 @@ function renderFinding() {
     // what has reached US. It never says what a settlement did — we cannot see
     // that, and asserting it would convert an absence into a diagnosis.
     if (never > 0) {
-      line.append('Nothing has reached us from ', fnum('fnum-never'), ' of ',
-        fnum('fnum-total'), ' settlements ',
-        h('span', { id: 'finding-window' }, ''), '.');
+      line.append(
+        'Nothing has reached us from ',
+        fnum('fnum-never'),
+        ' of ',
+        fnum('fnum-total'),
+        ' settlements ',
+        h('span', { id: 'finding-window' }, ''),
+        '.'
+      );
     } else {
-      line.append('At least one report has reached us from every one of ',
-        fnum('fnum-total'), ' settlements.');
+      line.append(
+        'At least one report has reached us from every one of ',
+        fnum('fnum-total'),
+        ' settlements.'
+      );
     }
 
     if (stopped > 0) {
       bLine.className = 'finding-b';
-      bLine.append(fnum('fnum-stopped'), ' ', h('span', { id: 'finding-b-verb' }, ''),
-        h('span', { class: 'fb-who', id: 'finding-b-who' }));
+      bLine.append(
+        fnum('fnum-stopped'),
+        ' ',
+        h('span', { id: 'finding-b-verb' }, ''),
+        h('span', { class: 'fb-who', id: 'finding-b-who' })
+      );
     } else {
       bLine.className = 'finding-b is-none';
       bLine.append(h('span', { id: 'finding-b-verb' }, ''));
@@ -318,27 +409,34 @@ function renderFinding() {
   if (stopped > 0) {
     countUp($('#fnum-stopped'), stopped);
     if (verb) {
-      verb.textContent = stopped === 1
-        ? 'more reported, and nothing has reached us since.'
-        : 'more reported, and nothing has reached us since.';
+      verb.textContent =
+        stopped === 1
+          ? 'more reported, and nothing has reached us since.'
+          : 'more reported, and nothing has reached us since.';
     }
     const who = $('#finding-b-who');
     if (who) {
       clear(who);
       // Named, with the two figures that matter and the moment contact was lost.
       for (const r of g.stopped.slice(0, 3)) {
-        who.append(h('span', { class: 'fb-one', title: r.lastReportAt || '' },
-          h('b', {}, r.name || r.settlementId || 'unnamed'),
-          ` · ${fmtPeople(r.population)} · ${fmtDuration(r.silenceHours)} since the ` +
-          `${Number(r.reportCount) === 1 ? 'only report' : 'last of ' + fmtCount(r.reportCount) + ' reports'}` +
-          ` that resolved here${r.lastReportAt ? `, ${relTime(r.lastReportAt)}` : ''}`));
+        who.append(
+          h(
+            'span',
+            { class: 'fb-one', title: r.lastReportAt || '' },
+            h('b', {}, r.name || r.settlementId || 'unnamed'),
+            ` · ${fmtPeople(r.population)} · ${fmtDuration(r.silenceHours)} since the ` +
+              `${Number(r.reportCount) === 1 ? 'only report' : 'last of ' + fmtCount(r.reportCount) + ' reports'}` +
+              ` that resolved here${r.lastReportAt ? `, ${relTime(r.lastReportAt)}` : ''}`
+          )
+        );
       }
       if (g.stopped.length > 3) {
         who.append(h('span', { class: 'fb-one' }, `and ${g.stopped.length - 3} more.`));
       }
     }
   } else if (verb) {
-    verb.textContent = 'No settlement reported and then stopped in this pass. That group is the ' +
+    verb.textContent =
+      'No settlement reported and then stopped in this pass. That group is the ' +
       'strongest signal this console can produce, and today it is empty.';
   }
 
@@ -347,19 +445,24 @@ function renderFinding() {
   clear(note);
   if (S.stale) {
     note.className = 'finding-note warnish';
-    note.append(`Last state received ${S.fetchedAt ? relTime(new Date(S.fetchedAt).toISOString()) : 'never'}. ` +
-      'The console cannot reach the API; these figures are not being updated.');
+    note.append(
+      `Last state received ${S.fetchedAt ? relTime(new Date(S.fetchedAt).toISOString()) : 'never'}. ` +
+        'The console cannot reach the API; these figures are not being updated.'
+    );
   } else if (S.running) {
     note.className = 'finding-note';
-    note.append(h('span', { class: 'runmark', 'aria-hidden': 'true' }),
-      'Recomputing. The sentence above is from the last completed pass.');
+    note.append(
+      h('span', { class: 'runmark', 'aria-hidden': 'true' }),
+      'Recomputing. The sentence above is from the last completed pass.'
+    );
   } else {
     note.className = 'finding-note';
     const srcs = S.state.sources.length;
     note.append(
-      `Last complete pass ${st.lastRunAt ? (relTime(st.lastRunAt) || 'just now') : 'never'} · ` +
-      `${fmtCount(st.reportCount)} reports from ${srcs || 'no'} source${srcs === 1 ? '' : 's'} · ` +
-      `ranking computed server-side, not here.`);
+      `Last complete pass ${st.lastRunAt ? relTime(st.lastRunAt) || 'just now' : 'never'} · ` +
+        `${fmtCount(st.reportCount)} reports from ${srcs || 'no'} source${srcs === 1 ? '' : 's'} · ` +
+        `ranking computed server-side, not here.`
+    );
   }
 
   announceFinding();
@@ -368,7 +471,10 @@ function renderFinding() {
 // One announcement per settled sentence — never one per animation frame.
 let lastFindingSpoken = '';
 function announceFinding() {
-  const spoken = `${el.finding.textContent.trim()} ${el.findingB.textContent.trim()}`.replace(/\s+/g, ' ');
+  const spoken = `${el.finding.textContent.trim()} ${el.findingB.textContent.trim()}`.replace(
+    /\s+/g,
+    ' '
+  );
   if (spoken === lastFindingSpoken) return;
   lastFindingSpoken = spoken;
   clearTimeout(announceFinding._t);
@@ -393,9 +499,12 @@ function renderHumanBand() {
   if (n > 0) {
     txt.append(
       h('b', {}, h('span', { class: 'n' }, String(n)), ` decision${n === 1 ? '' : 's'}`),
-      ` waiting on a named human. Nothing becomes actionable until someone types their name against it.`);
+      ` waiting on a named human. Nothing becomes actionable until someone types their name against it.`
+    );
   } else {
-    txt.append('Nothing is waiting on a human right now. Everything raised so far has been signed for.');
+    txt.append(
+      'Nothing is waiting on a human right now. Everything raised so far has been signed for.'
+    );
   }
   // Same count, three places: this band, the tab badge, the status bar.
   el.navBadge.hidden = n === 0;
@@ -411,7 +520,7 @@ function renderStages() {
   const st = S.state ? S.state.stats : null;
   const hasRun = !!(st && st.lastRunAt);
   const failedStages = failedStagesInLastRun();
-  const mode = S.running ? 'running' : (hasRun ? 'done' : 'pending');
+  const mode = S.running ? 'running' : hasRun ? 'done' : 'pending';
   document.body.classList.toggle('is-running', S.running);
 
   const stateOf = (id) => {
@@ -420,19 +529,28 @@ function renderStages() {
     return 'pending';
   };
   const glyphOf = (s) => (s === 'done' ? '✓' : s === 'failed' ? '▲' : s === 'active' ? '▸' : '·');
-  const wordOf = (s) => (s === 'done' ? 'complete' : s === 'failed' ? 'degraded'
-    : s === 'active' ? 'running' : 'not started');
+  const wordOf = (s) =>
+    s === 'done'
+      ? 'complete'
+      : s === 'failed'
+        ? 'degraded'
+        : s === 'active'
+          ? 'running'
+          : 'not started';
 
   // Full labels, never clipped, at every width.
   clear(el.stageList);
   for (const stage of STAGES) {
     const state = stateOf(stage.id);
-    el.stageList.append(h('div', { class: 'stage-row', 'data-state': state },
-      h('span', { class: 'g', 'aria-hidden': 'true' }, glyphOf(state)),
-      h('span', {},
-        h('span', {}, stage.label),
-        h('span', { class: 'bar' }, h('i', {}))),
-      h('span', { class: 'lb' }, wordOf(state))));
+    el.stageList.append(
+      h(
+        'div',
+        { class: 'stage-row', 'data-state': state },
+        h('span', { class: 'g', 'aria-hidden': 'true' }, glyphOf(state)),
+        h('span', {}, h('span', {}, stage.label), h('span', { class: 'bar' }, h('i', {}))),
+        h('span', { class: 'lb' }, wordOf(state))
+      )
+    );
   }
 
   clear(el.sbTrack);
@@ -445,16 +563,24 @@ function renderStages() {
     const secs = Math.floor((Date.now() - S.runStartedAt) / 1000);
     sub = `Running — the server does not report per-stage progress · ${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
   } else if (mode === 'done') {
-    sub = `Ready · last complete pass ${relTime(st.lastRunAt) || 'just now'}` +
-      (Number.isFinite(Number(st.durationMs)) ? ` in ${(Number(st.durationMs) / 1000).toFixed(1)}s` : '') +
-      (failedStages.size ? ` · ${failedStages.size} stage${failedStages.size === 1 ? '' : 's'} degraded` : '');
+    sub =
+      `Ready · last complete pass ${relTime(st.lastRunAt) || 'just now'}` +
+      (Number.isFinite(Number(st.durationMs))
+        ? ` in ${(Number(st.durationMs) / 1000).toFixed(1)}s`
+        : '') +
+      (failedStages.size
+        ? ` · ${failedStages.size} stage${failedStages.size === 1 ? '' : 's'} degraded`
+        : '');
   } else {
     sub = S.state ? 'No pipeline pass has completed yet.' : 'Waiting for first state…';
   }
   el.railSub.textContent = sub;
   el.sbText.textContent = sub;
   el.sbText.title = sub;
-  if (sub !== lastAnnounced) { lastAnnounced = sub; el.railAnnounce.textContent = sub; }
+  if (sub !== lastAnnounced) {
+    lastAnnounced = sub;
+    el.railAnnounce.textContent = sub;
+  }
 }
 
 // A stage is marked failed only if the server actually wrote an incident naming it
@@ -496,8 +622,13 @@ function renderPassKv() {
   put('Reported then stopped', String(g.stopped.length));
   put('Heard from recently', String(g.recent.length));
   put('Pending decisions', String(pendingItems().length));
-  put('Pass duration', Number.isFinite(Number(st.durationMs))
-    ? `${(Number(st.durationMs) / 1000).toFixed(1)}s` : 'not reported', !Number.isFinite(Number(st.durationMs)));
+  put(
+    'Pass duration',
+    Number.isFinite(Number(st.durationMs))
+      ? `${(Number(st.durationMs) / 1000).toFixed(1)}s`
+      : 'not reported',
+    !Number.isFinite(Number(st.durationMs))
+  );
   put('Last complete pass', st.lastRunAt ? localFull(st.lastRunAt) : 'never', !st.lastRunAt);
 
   const t3 = st.tier3;
@@ -505,8 +636,13 @@ function renderPassKv() {
     put('Tier-3 by harness', fmtCount(t3.executedByHarness));
     put('Tier-3 by fallback', fmtCount(t3.executedByFallback));
     put('Tier-3 unresolved', fmtCount(t3.unresolved));
-    put('Harness', t3.harnessReachable ? `reachable · ${t3.harnessModel || 'model not reported'}`
-      : 'not reachable', !t3.harnessReachable);
+    put(
+      'Harness',
+      t3.harnessReachable
+        ? `reachable · ${t3.harnessModel || 'model not reported'}`
+        : 'not reachable',
+      !t3.harnessReachable
+    );
     if (t3.harnessTokens !== undefined) put('Harness tokens', fmtInt(t3.harnessTokens));
   } else {
     put('Tier-3 telemetry', 'not reported by this run', true);
@@ -523,7 +659,11 @@ async function runPipeline() {
   renderStages();
   const tick = setInterval(renderStages, 1000);
   try {
-    const res = await fetchJson('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 180000);
+    const res = await fetchJson(
+      '/api/run',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      180000
+    );
     if (res.status === 409) {
       toast('A pipeline pass is already running.', 'warn', 5000);
       logLocal('Run rejected: a pipeline pass was already in flight (HTTP 409).');
@@ -533,7 +673,10 @@ async function runPipeline() {
       logLocal(`Pipeline run failed: ${msg}`, res.body || null);
     } else {
       const b = res.body || {};
-      logLocal(`Pipeline pass finished: ${fmtCount(b.reportCount)} reports, ${fmtCount(b.clusterCount)} clusters in ${b.durationMs}ms.`, b);
+      logLocal(
+        `Pipeline pass finished: ${fmtCount(b.reportCount)} reports, ${fmtCount(b.clusterCount)} clusters in ${b.durationMs}ms.`,
+        b
+      );
     }
   } catch (err) {
     toast('Could not reach the server to start a pipeline pass.', 'critical', 10000);
@@ -558,13 +701,22 @@ function visibleRows() {
   else if (S.filter === 'nodata') list = list.filter((r) => silenceKind(r) === 'never');
   else if (S.filter === 'stopped') list = list.filter((r) => silenceKind(r) === 'stopped');
   const q = S.query.trim().toLowerCase();
-  if (q) list = list.filter((r) =>
-    String(r.name || '').toLowerCase().includes(q) || String(r.district || '').toLowerCase().includes(q));
+  if (q)
+    list = list.filter(
+      (r) =>
+        String(r.name || '')
+          .toLowerCase()
+          .includes(q) ||
+        String(r.district || '')
+          .toLowerCase()
+          .includes(q)
+    );
 
   const { key, dir } = S.sort;
   const sign = dir === 'asc' ? 1 : -1;
   list.sort((a, b) => {
-    const av = a[key], bv = b[key];
+    const av = a[key],
+      bv = b[key];
     if (typeof av === 'string' || typeof bv === 'string') {
       return sign * String(av ?? '').localeCompare(String(bv ?? ''), 'en');
     }
@@ -580,8 +732,8 @@ function visibleRows() {
 // approximated. The row set is rebuilt only when something actually changed;
 // a poll that changes nothing must not tear the DOM out from under a focus.
 let rankSig = '';
-const openWhy = new Set();          // settlementIds whose disclosure is open
-const prevBand = new Map();         // settlementId -> last silence band, for the flash
+const openWhy = new Set(); // settlementIds whose disclosure is open
+const prevBand = new Map(); // settlementId -> last silence band, for the flash
 
 function renderRank(force) {
   const list = visibleRows();
@@ -592,10 +744,26 @@ function renderRank(force) {
   // completely different screens (skeletons vs. the honest empty state). Without
   // it the board never leaves its skeletons on a cold boot.
   const sig = JSON.stringify([
-    !!S.state, S.stale, S.running,
-    S.filter, S.query, S.sort, S.selectedId, all.length,
-    list.map((r) => [r.settlementId, r.rank, r.silenceHours, r.population, r.giZScore,
-      r.corroborationCount, r.anomalyType, r.coverageBasis, r.reportCount, pend.has(r.settlementId)])
+    !!S.state,
+    S.stale,
+    S.running,
+    S.filter,
+    S.query,
+    S.sort,
+    S.selectedId,
+    all.length,
+    list.map((r) => [
+      r.settlementId,
+      r.rank,
+      r.silenceHours,
+      r.population,
+      r.giZScore,
+      r.corroborationCount,
+      r.anomalyType,
+      r.coverageBasis,
+      r.reportCount,
+      pend.has(r.settlementId)
+    ])
   ]);
   if (!force && sig === rankSig) return;
   const firstPaint = rankSig === '';
@@ -604,10 +772,14 @@ function renderRank(force) {
 
   const g = groupByKind(all);
   el.rankCount.textContent = all.length
-    ? (list.length === all.length ? `${all.length} settlements` : `${list.length} of ${all.length}`)
+    ? list.length === all.length
+      ? `${all.length} settlements`
+      : `${list.length} of ${all.length}`
     : '—';
   $('#f-all').textContent = String(all.length);
-  $('#f-anom').textContent = String(all.filter((r) => r.anomalyType && r.anomalyType !== 'none').length);
+  $('#f-anom').textContent = String(
+    all.filter((r) => r.anomalyType && r.anomalyType !== 'none').length
+  );
   $('#f-nodata').textContent = String(g.never.length);
   $('#f-stopped').textContent = String(g.stopped.length);
 
@@ -626,25 +798,38 @@ function renderRank(force) {
   // ── empty ──
   if (!all.length) {
     el.rankTable.hidden = true;
-    el.rankEmpty.append(emptyState('◌', 'Nothing scored yet',
-      'The first pipeline pass has not produced a ranking. It reaches the sources, resolves reports ' +
-      'to places, then fits a baseline before any settlement can be ranked.',
-      S.running ? null : { label: 'Run pipeline', onClick: runPipeline }));
+    el.rankEmpty.append(
+      emptyState(
+        '◌',
+        'Nothing scored yet',
+        'The first pipeline pass has not produced a ranking. It reaches the sources, resolves reports ' +
+          'to places, then fits a baseline before any settlement can be ranked.',
+        S.running ? null : { label: 'Run pipeline', onClick: runPipeline }
+      )
+    );
     el.boardFoot.textContent = S.running ? 'Pass running…' : 'No ranking has been produced.';
     return;
   }
   // ── empty after filtering ──
   if (!list.length) {
     el.rankTable.hidden = true;
-    el.rankEmpty.append(emptyState('⌕', 'No settlements match',
-      `${all.length} settlements are loaded. Clear the filter to see them.`,
-      {
-        label: 'Clear filter',
-        onClick: () => {
-          S.query = ''; S.filter = 'all'; el.rankFilter.value = '';
-          syncFilterButtons(); renderRank(true);
+    el.rankEmpty.append(
+      emptyState(
+        '⌕',
+        'No settlements match',
+        `${all.length} settlements are loaded. Clear the filter to see them.`,
+        {
+          label: 'Clear filter',
+          onClick: () => {
+            S.query = '';
+            S.filter = 'all';
+            el.rankFilter.value = '';
+            syncFilterButtons();
+            renderRank(true);
+          }
         }
-      }));
+      )
+    );
     el.boardFoot.textContent = `0 of ${all.length} shown.`;
     return;
   }
@@ -666,39 +851,62 @@ function renderRank(force) {
     silTd.style.setProperty('--band', `var(--sil-${stop})`);
     silTd.style.setProperty('--bandtint', `var(--sil-tint-${stop})`);
 
-    const whyBtn = h('button', {
-      type: 'button', class: 'why-btn', 'aria-expanded': String(open), 'aria-controls': whyId,
-      title: 'Why this ranks here',
-      'aria-label': `Why ${r.name || r.settlementId} ranks here`,
-      onclick: (ev) => {
-        ev.stopPropagation();
-        if (openWhy.has(r.settlementId)) openWhy.delete(r.settlementId);
-        else openWhy.add(r.settlementId);
-        renderRank(true);
-        const b = $(`.why-btn[aria-controls="${whyId}"]`, el.rankRows);
-        if (b) b.focus();
-      }
-    }, open ? '▾' : '▸');
+    const whyBtn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'why-btn',
+        'aria-expanded': String(open),
+        'aria-controls': whyId,
+        title: 'Why this ranks here',
+        'aria-label': `Why ${r.name || r.settlementId} ranks here`,
+        onclick: (ev) => {
+          ev.stopPropagation();
+          if (openWhy.has(r.settlementId)) openWhy.delete(r.settlementId);
+          else openWhy.add(r.settlementId);
+          renderRank(true);
+          const b = $(`.why-btn[aria-controls="${whyId}"]`, el.rankRows);
+          if (b) b.focus();
+        }
+      },
+      open ? '▾' : '▸'
+    );
 
-    const tr = h('tr', {
-      class: `rank-row${isPending ? ' is-pending' : ''}${animate ? ' enter' : ''}`,
-      tabindex: '0', role: 'button',
-      'data-id': r.settlementId, 'data-kind': kind,
-      'aria-selected': String(S.selectedId === r.settlementId),
-      'aria-label': `${r.name || r.settlementId}, ${r.district || 'district not recorded'}. ` +
-        `Rank ${fmtCount(r.rank)}. Silent ${fmtDuration(r.silenceHours)}. ${fmtPeople(r.population)}. ` +
-        `${km.word}.${isPending ? ' A human decision is pending here.' : ''} ` +
-        'Press Enter to open the full evidence.'
-    },
+    const tr = h(
+      'tr',
+      {
+        class: `rank-row${isPending ? ' is-pending' : ''}${animate ? ' enter' : ''}`,
+        tabindex: '0',
+        role: 'button',
+        'data-id': r.settlementId,
+        'data-kind': kind,
+        'aria-selected': String(S.selectedId === r.settlementId),
+        'aria-label':
+          `${r.name || r.settlementId}, ${r.district || 'district not recorded'}. ` +
+          `Rank ${fmtCount(r.rank)}. Silent ${fmtDuration(r.silenceHours)}. ${fmtPeople(r.population)}. ` +
+          `${km.word}.${isPending ? ' A human decision is pending here.' : ''} ` +
+          'Press Enter to open the full evidence.'
+      },
       h('td', { class: 'c-rank' }, fmtCount(r.rank)),
-      h('td', { class: 'c-name', title: `${r.name || r.settlementId} · ${r.district || 'district not recorded'}` },
+      h(
+        'td',
+        {
+          class: 'c-name',
+          title: `${r.name || r.settlementId} · ${r.district || 'district not recorded'}`
+        },
         h('b', {}, r.name || r.settlementId),
-        h('span', { class: 'd' }, r.district || 'district not recorded')),
+        h('span', { class: 'd' }, r.district || 'district not recorded')
+      ),
       silTd,
       h('td', { class: 'c-pop n' }, fmtInt(r.population)),
-      h('td', { class: 'c-kind', title: km.label },
-        h('span', { class: 'g', 'aria-hidden': 'true' }, km.glyph), km.short),
-      h('td', { class: 'c-why' }, whyBtn));
+      h(
+        'td',
+        { class: 'c-kind', title: km.label },
+        h('span', { class: 'g', 'aria-hidden': 'true' }, km.glyph),
+        km.short
+      ),
+      h('td', { class: 'c-why' }, whyBtn)
+    );
     if (animate) tr.style.setProperty('--i', String(i));
 
     // Direction-aware flash: worse = the ramp's own warm end, resolved = --ok.
@@ -719,9 +927,10 @@ function renderRank(force) {
   });
 
   const shown = list.length;
-  el.boardFoot.textContent = (shown === all.length
-    ? `All ${all.length} settlements in the corridor. `
-    : `Showing ${shown} of ${all.length} — ${all.length - shown} hidden by the filter. `) +
+  el.boardFoot.textContent =
+    (shown === all.length
+      ? `All ${all.length} settlements in the corridor. `
+      : `Showing ${shown} of ${all.length} — ${all.length - shown} hidden by the filter. `) +
     'Two figures per row; ▸ opens why it ranks there, Enter opens the full evidence.';
 }
 
@@ -733,12 +942,21 @@ function renderRank(force) {
 function whyRow(r, id) {
   const sig = Number(r.giZScore) > 1.96;
   const kind = silenceKind(r);
-  const stat = (k, v, opts = {}) => h('div', { class: `why-stat${opts.sig ? ' is-sig' : ''}` },
-    h('span', { class: 'k' }, k),
-    h('span', { class: `v${opts.na ? ' na' : ''}`, title: opts.title || null }, v));
+  const stat = (k, v, opts = {}) =>
+    h(
+      'div',
+      { class: `why-stat${opts.sig ? ' is-sig' : ''}` },
+      h('span', { class: 'k' }, k),
+      h('span', { class: `v${opts.na ? ' na' : ''}`, title: opts.title || null }, v)
+    );
 
-  const grid = h('div', { class: 'why-grid' },
-    stat('Gi* z-score', fmtZ(r.giZScore), { sig, title: 'Getis-Ord Gi* local clustering statistic' }),
+  const grid = h(
+    'div',
+    { class: 'why-grid' },
+    stat('Gi* z-score', fmtZ(r.giZScore), {
+      sig,
+      title: 'Getis-Ord Gi* local clustering statistic'
+    }),
     stat('own z', fmtZ(r.ownZScore)),
     stat('neighbour z', fmtZ(r.neighborZScore)),
     stat('corridor neighbours', fmtCount(r.neighborCount)),
@@ -753,57 +971,90 @@ function whyRow(r, id) {
     stat('cohort', r.cohortKey || 'not recorded', { na: !r.cohortKey }),
     stat('baseline fit', r.fitBasis || 'not recorded', { na: !r.fitBasis }),
     stat('cohort sample gaps', fmtCount(r.cohortSampleGaps)),
-    stat('anomaly type', anomalyOf(r.anomalyType).short || 'none flagged',
-      { na: !r.anomalyType || r.anomalyType === 'none' }),
+    stat('anomaly type', anomalyOf(r.anomalyType).short || 'none flagged', {
+      na: !r.anomalyType || r.anomalyType === 'none'
+    }),
     stat('coverage basis', r.coverageBasis || 'not recorded', { na: !r.coverageBasis }),
-    stat('last report', r.lastReportAt ? localFull(r.lastReportAt) : 'Never',
-      { na: !r.lastReportAt, title: r.lastReportAt || '' }));
+    stat('last report', r.lastReportAt ? localFull(r.lastReportAt) : 'Never', {
+      na: !r.lastReportAt,
+      title: r.lastReportAt || ''
+    })
+  );
 
   const note = h('p', { class: 'why-note' });
   if (kind === 'never') {
-    note.append(h('b', {}, 'No data reached us. '),
+    note.append(
+      h('b', {}, 'No data reached us. '),
       `No report has ever resolved to ${r.name || 'this settlement'}, so its expected reporting rate is ` +
-      `borrowed from cohort ${r.cohortKey || 'unknown'} rather than measured here. ` +
-      `We do not know whether it is quiet, unreachable, or simply unreported.`);
+        `borrowed from cohort ${r.cohortKey || 'unknown'} rather than measured here. ` +
+        `We do not know whether it is quiet, unreachable, or simply unreported.`
+    );
   } else if (kind === 'stopped') {
-    note.append(h('b', {}, 'Coverage existed here and then ceased. '),
+    note.append(
+      h('b', {}, 'Coverage existed here and then ceased. '),
       `${fmtCount(r.reportCount)} report${Number(r.reportCount) === 1 ? '' : 's'} resolved to ` +
-      `${r.name || 'this settlement'}, the last of them ` +
-      `${r.lastReportAt ? localFull(r.lastReportAt) : 'at a time the server did not record'}. ` +
-      `A gap in our sources still looks identical to a gap on the ground.`);
+        `${r.name || 'this settlement'}, the last of them ` +
+        `${r.lastReportAt ? localFull(r.lastReportAt) : 'at a time the server did not record'}. ` +
+        `A gap in our sources still looks identical to a gap on the ground.`
+    );
   } else {
-    note.append(`A report reached us within the last ${STOPPED_AFTER_HOURS} hours. ` +
-      `This row is in the ranking for completeness, not because it is silent.`);
+    note.append(
+      `A report reached us within the last ${STOPPED_AFTER_HOURS} hours. ` +
+        `This row is in the ranking for completeness, not because it is silent.`
+    );
   }
 
-  const rule = h('p', { class: 'why-note' },
+  const rule = h(
+    'p',
+    { class: 'why-note' },
     h('b', {}, 'Ordering. '),
     'The server ranks by Gi* z descending, then surprisal, then population, then settlement id. ' +
-    'It is deterministic and no language model touches it. This console displays that rank; ' +
-    'it does not compute it.');
+      'It is deterministic and no language model touches it. This console displays that rank; ' +
+      'it does not compute it.'
+  );
 
-  return h('tr', { class: 'why-row', id },
-    h('td', { colspan: '6' },
-      h('div', { class: 'why-panel' },
+  return h(
+    'tr',
+    { class: 'why-row', id },
+    h(
+      'td',
+      { colspan: '6' },
+      h(
+        'div',
+        { class: 'why-panel' },
         h('h4', {}, `Why ${r.name || r.settlementId} ranks ${fmtCount(r.rank)}`),
-        grid, note, rule)));
+        grid,
+        note,
+        rule
+      )
+    )
+  );
 }
 
 function onRankKey(ev) {
   const tr = ev.currentTarget;
   const all = $$('.rank-row', el.rankRows);
   const i = all.indexOf(tr);
-  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(tr.dataset.id, { open: true }); return; }
+  if (ev.key === 'Enter' || ev.key === ' ') {
+    ev.preventDefault();
+    select(tr.dataset.id, { open: true });
+    return;
+  }
   let next = null;
   if (ev.key === 'ArrowDown') next = all[Math.min(all.length - 1, i + 1)];
   else if (ev.key === 'ArrowUp') next = all[Math.max(0, i - 1)];
   else if (ev.key === 'Home') next = all[0];
   else if (ev.key === 'End') next = all[all.length - 1];
-  if (next) { ev.preventDefault(); next.focus(); next.scrollIntoView({ block: 'nearest' }); }
+  if (next) {
+    ev.preventDefault();
+    next.focus();
+    next.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function syncFilterButtons() {
-  for (const b of $$('[data-filt]')) b.setAttribute('aria-pressed', String(b.dataset.filt === S.filter));
+  for (const b of $$('[data-filt]'))
+    b.setAttribute('aria-pressed', String(b.dataset.filt === S.filter));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -822,12 +1073,13 @@ async function select(id, opts = {}) {
 
   S.detailLoading = true;
   S.detailError = null;
-  S.detail = null;      // never render the previous settlement's evidence under a new name
+  S.detail = null; // never render the previous settlement's evidence under a new name
   S.detailId = id;
   renderEvidence();
 
-  const res = await fetchJson(`/api/settlement/${encodeURIComponent(id)}`, {}, 12000)
-    .catch((err) => ({ ok: false, status: 0, netError: err }));
+  const res = await fetchJson(`/api/settlement/${encodeURIComponent(id)}`, {}, 12000).catch(
+    (err) => ({ ok: false, status: 0, netError: err })
+  );
   if (S.detailId !== id) return;
   S.detailLoading = false;
   if (res.status === 404) {
@@ -844,7 +1096,10 @@ async function select(id, opts = {}) {
 }
 
 function clearSelection() {
-  S.selectedId = null; S.detail = null; S.detailId = null; S.detailError = null;
+  S.selectedId = null;
+  S.detail = null;
+  S.detailId = null;
+  S.detailError = null;
   renderSettlementHead(null, null);
   if (mapCtl) mapCtl.select(null, { fly: false });
   renderRank(true);
@@ -865,26 +1120,39 @@ function renderSettlementHead(row, id) {
     if (tab) tab.lastChild.textContent = ' Settlement';
     return;
   }
-  el.setName.textContent = row ? (row.name || id) : id;
+  el.setName.textContent = row ? row.name || id : id;
   el.setDistrict.textContent = row
     ? `${row.district || 'district not recorded'} · ${row.settlementId}`
     : 'Not in the current ranking.';
-  if (tab) tab.lastChild.textContent = row && row.name ? ` Settlement · ${row.name}` : ' Settlement';
+  if (tab)
+    tab.lastChild.textContent = row && row.name ? ` Settlement · ${row.name}` : ' Settlement';
 
   clear(el.setFacts);
   if (!row) return;
   const km = KINDS[silenceKind(row)];
-  const fact = (k, v, sub) => h('div', { class: 'set-fact' },
-    h('span', { class: 'k' }, k), h('span', { class: 'v' }, v),
-    sub ? h('span', { class: 'sub' }, sub) : null);
+  const fact = (k, v, sub) =>
+    h(
+      'div',
+      { class: 'set-fact' },
+      h('span', { class: 'k' }, k),
+      h('span', { class: 'v' }, v),
+      sub ? h('span', { class: 'sub' }, sub) : null
+    );
   el.setFacts.append(
-    fact('Silent for', fmtDuration(row.silenceHours),
-      row.lastReportAt ? `since ${localFull(row.lastReportAt)}` : 'no report has ever resolved here'),
+    fact(
+      'Silent for',
+      fmtDuration(row.silenceHours),
+      row.lastReportAt ? `since ${localFull(row.lastReportAt)}` : 'no report has ever resolved here'
+    ),
     fact('People', fmtInt(row.population), 'population of record'),
-    h('div', { class: 'set-fact' },
+    h(
+      'div',
+      { class: 'set-fact' },
       h('span', { class: 'k' }, 'Coverage'),
       h('span', { class: 'sub', style: 'margin-top:4px' }, coverageChip(row)),
-      h('span', { class: 'sub' }, km.word)));
+      h('span', { class: 'sub' }, km.word)
+    )
+  );
 }
 
 function renderEvidence() {
@@ -892,20 +1160,46 @@ function renderEvidence() {
   clear(box);
 
   if (!S.selectedId) {
-    box.append(emptyState('◇', 'Nothing selected',
-      'Pick a settlement from the silence board or the map to see every number behind its score, ' +
-      'the reports that reached us, and what we do not know.'));
+    box.append(
+      emptyState(
+        '◇',
+        'Nothing selected',
+        'Pick a settlement from the silence board or the map to see every number behind its score, ' +
+          'the reports that reached us, and what we do not know.'
+      )
+    );
     return;
   }
   const row = rowById(S.selectedId);
 
   if (S.detailError && S.detailError.kind === '404') {
-    box.append(h('div', { class: 'ev' }, h('div', { class: 'ev-block' },
-      h('h4', {}, 'No record'),
-      h('p', { class: 'unknown' },
-        h('strong', {}, `No record for "${S.detailError.id}".`),
-        ' The ranking may have been rebuilt since this row was drawn.'),
-      h('button', { class: 'btn btn-sm', type: 'button', style: 'margin-top:8px', onclick: () => pollState() }, 'Refresh state'))));
+    box.append(
+      h(
+        'div',
+        { class: 'ev' },
+        h(
+          'div',
+          { class: 'ev-block' },
+          h('h4', {}, 'No record'),
+          h(
+            'p',
+            { class: 'unknown' },
+            h('strong', {}, `No record for "${S.detailError.id}".`),
+            ' The ranking may have been rebuilt since this row was drawn.'
+          ),
+          h(
+            'button',
+            {
+              class: 'btn btn-sm',
+              type: 'button',
+              style: 'margin-top:8px',
+              onclick: () => pollState()
+            },
+            'Refresh state'
+          )
+        )
+      )
+    );
     return;
   }
   if (S.detailLoading && !S.detail) {
@@ -913,11 +1207,23 @@ function renderEvidence() {
     return;
   }
   if (S.detailError && S.detailError.kind === 'net') {
-    box.append(h('div', { class: 'ev' }, h('div', { class: 'ev-block' },
-      h('p', { class: 'unknown' },
-        h('strong', {}, 'Could not load the evidence for this settlement.'),
-        ' The ranking row below is the last state the console received.'),
-      row ? observedBlock(row) : null)));
+    box.append(
+      h(
+        'div',
+        { class: 'ev' },
+        h(
+          'div',
+          { class: 'ev-block' },
+          h(
+            'p',
+            { class: 'unknown' },
+            h('strong', {}, 'Could not load the evidence for this settlement.'),
+            ' The ranking row below is the last state the console received.'
+          ),
+          row ? observedBlock(row) : null
+        )
+      )
+    );
     return;
   }
 
@@ -936,39 +1242,74 @@ function renderEvidence() {
   const math = mathBlock(ranked, sb);
   math.classList.remove('ev-block');
   math.querySelector('h4')?.remove();
-  grid.append(h('details', { class: 'why' },
-    h('summary', {}, 'Why this ranks here',
-      h('span', { class: 'hint' }, 'λ, surprisal, Gi* — computed server-side')),
-    h('div', { class: 'why-body' }, math)));
+  grid.append(
+    h(
+      'details',
+      { class: 'why' },
+      h(
+        'summary',
+        {},
+        'Why this ranks here',
+        h('span', { class: 'hint' }, 'λ, surprisal, Gi* — computed server-side')
+      ),
+      h('div', { class: 'why-body' }, math)
+    )
+  );
 
   const release = S.releases.get(S.selectedId);
   if (release) grid.append(releaseBlock(release));
 
   if (Array.isArray(d.neighbors) && d.neighbors.length) {
-    grid.append(h('div', { class: 'ev-block' },
-      h('h4', {}, 'Corridor neighbours'),
-      h('div', { class: 'nb-chips' }, d.neighbors.map((nid) => {
-        const nr = rowById(nid);
-        return h('button', { type: 'button', onclick: () => select(nid) },
-          nr ? `${nr.name} · ${fmtHours(nr.silenceHours)}` : nid);
-      }))));
+    grid.append(
+      h(
+        'div',
+        { class: 'ev-block' },
+        h('h4', {}, 'Corridor neighbours'),
+        h(
+          'div',
+          { class: 'nb-chips' },
+          d.neighbors.map((nid) => {
+            const nr = rowById(nid);
+            return h(
+              'button',
+              { type: 'button', onclick: () => select(nid) },
+              nr ? `${nr.name} · ${fmtHours(nr.silenceHours)}` : nid
+            );
+          })
+        )
+      )
+    );
   }
 
   box.append(grid);
 }
 
 function observedBlock(r, d) {
-  if (!r) return h('div', { class: 'ev-block' }, h('h4', {}, 'What we observed'),
-    h('p', { class: 'unknown' }, 'This settlement is not in the current ranking.'));
+  if (!r)
+    return h(
+      'div',
+      { class: 'ev-block' },
+      h('h4', {}, 'What we observed'),
+      h('p', { class: 'unknown' }, 'This settlement is not in the current ranking.')
+    );
   const dl = h('dl', { class: 'kv' });
-  const put = (k, v, na) => { dl.append(h('dt', {}, k), h('dd', { class: na ? 'na' : null }, v)); };
-  put('Last report', r.lastReportAt ? (relTime(r.lastReportAt) || localFull(r.lastReportAt)) : 'Never', !r.lastReportAt);
+  const put = (k, v, na) => {
+    dl.append(h('dt', {}, k), h('dd', { class: na ? 'na' : null }, v));
+  };
+  put(
+    'Last report',
+    r.lastReportAt ? relTime(r.lastReportAt) || localFull(r.lastReportAt) : 'Never',
+    !r.lastReportAt
+  );
   put('Silent for', fmtHours(r.silenceHours));
   put('Reports', fmtCount(r.reportCount));
   put('Corroboration', fmtCount(r.corroborationCount));
   put('Population', fmtInt(r.population));
   put('Hazard tier', fmtCount(r.hazardTier));
-  put('Corridor neighbours', fmtCount(r.neighborCount ?? (d && Array.isArray(d.neighbors) ? d.neighbors.length : null)));
+  put(
+    'Corridor neighbours',
+    fmtCount(r.neighborCount ?? (d && Array.isArray(d.neighbors) ? d.neighbors.length : null))
+  );
   put('Anomaly type', anomalyOf(r.anomalyType).short || 'none flagged');
   const blk = h('div', { class: 'ev-block' }, h('h4', {}, 'What we observed'), dl);
   if (r.lastReportAt) {
@@ -1002,13 +1343,23 @@ function emptyTail(r, d) {
   const haveReports = d && Array.isArray(d.reports);
 
   if (!Number.isFinite(sil)) {
-    wrap.append(h('p', { class: 'tl-cap na' },
-      'No silence duration was returned for this settlement, so there is no timeline to draw.'));
+    wrap.append(
+      h(
+        'p',
+        { class: 'tl-cap na' },
+        'No silence duration was returned for this settlement, so there is no timeline to draw.'
+      )
+    );
     return wrap;
   }
   if (!haveReports) {
-    wrap.append(h('p', { class: 'tl-cap na' },
-      'The reports behind this row have not loaded, so the arrival timeline is not drawn.'));
+    wrap.append(
+      h(
+        'p',
+        { class: 'tl-cap na' },
+        'The reports behind this row have not loaded, so the arrival timeline is not drawn.'
+      )
+    );
     return wrap;
   }
 
@@ -1036,12 +1387,14 @@ function emptyTail(r, d) {
   svg.setAttribute('role', 'img');
   svg.dataset.kind = kind;
   svg.style.setProperty('--tlband', `var(--sil-${stop})`);
-  svg.setAttribute('aria-label',
+  svg.setAttribute(
+    'aria-label',
     `Report arrivals over the last ${fmtDuration(windowH)}. ` +
-    (ages.length
-      ? `${ages.length} report${ages.length === 1 ? '' : 's'} arrived, the most recent ${fmtDuration(sil)} ago, ` +
-        `followed by ${fmtDuration(sil)} with no arrival.`
-      : `No report arrived at any point in this window.`));
+      (ages.length
+        ? `${ages.length} report${ages.length === 1 ? '' : 's'} arrived, the most recent ${fmtDuration(sil)} ago, ` +
+          `followed by ${fmtDuration(sil)} with no arrival.`
+        : `No report arrived at any point in this window.`)
+  );
 
   const add = (name, attrs) => {
     const n = document.createElementNS('http://www.w3.org/2000/svg', name);
@@ -1054,7 +1407,11 @@ function emptyTail(r, d) {
   // duration, and a duration on a timeline is a region. This band is what makes
   // the void the largest mark in the component.
   add('rect', {
-    class: 'tl-void', x: tailStart, y: TL.axis - 22, width: Math.max(0, TL.x1 - tailStart), height: 44
+    class: 'tl-void',
+    x: tailStart,
+    y: TL.axis - 22,
+    width: Math.max(0, TL.x1 - tailStart),
+    height: 44
   });
 
   // the axis
@@ -1062,7 +1419,13 @@ function emptyTail(r, d) {
 
   // the gap rule — the heaviest stroke on the drawing, with a bracket at each end
   add('line', { class: 'tl-gap', x1: tailStart, y1: TL.axis, x2: TL.x1, y2: TL.axis });
-  add('line', { class: 'tl-gap-cap', x1: tailStart, y1: TL.axis - 20, x2: tailStart, y2: TL.axis + 20 });
+  add('line', {
+    class: 'tl-gap-cap',
+    x1: tailStart,
+    y1: TL.axis - 20,
+    x2: tailStart,
+    y2: TL.axis + 20
+  });
   add('line', { class: 'tl-gap-cap', x1: TL.x1, y1: TL.axis - 20, x2: TL.x1, y2: TL.axis + 20 });
 
   // one hairline tick per report that resolved here
@@ -1074,7 +1437,12 @@ function emptyTail(r, d) {
   // "now" is the right-hand edge and is labelled as such
   const nowT = add('text', { class: 'tl-lab', x: TL.x1, y: TL.axis + 36, 'text-anchor': 'end' });
   nowT.textContent = 'now';
-  const startT = add('text', { class: 'tl-lab', x: TL.x0, y: TL.axis + 36, 'text-anchor': 'start' });
+  const startT = add('text', {
+    class: 'tl-lab',
+    x: TL.x0,
+    y: TL.axis + 36,
+    'text-anchor': 'start'
+  });
   startT.textContent = `${fmtDuration(windowH)} ago`;
   // The measured length of the void, written inside the void — but only when it
   // actually fits inside it. A caption that overflows its own gap would be
@@ -1083,7 +1451,10 @@ function emptyTail(r, d) {
   const inner = fmtDuration(sil);
   if (gapW > inner.length * 10.4 + 26) {
     const t = add('text', {
-      class: 'tl-inner', x: (tailStart + TL.x1) / 2, y: TL.axis - 28, 'text-anchor': 'middle'
+      class: 'tl-inner',
+      x: (tailStart + TL.x1) / 2,
+      y: TL.axis - 28,
+      'text-anchor': 'middle'
     });
     t.textContent = inner;
   }
@@ -1094,31 +1465,47 @@ function emptyTail(r, d) {
   // the component: the void is a quantity, not a rendering accident.
   const cap = h('p', { class: `tl-cap tl-kind-${kind}` });
   if (kind === 'never') {
-    cap.append(h('b', {}, `${fmtDuration(sil)} with no tick. `),
+    cap.append(
+      h('b', {}, `${fmtDuration(sil)} with no tick. `),
       'No report has ever resolved here, so there is nothing on this line at all. ' +
-      'That is an absence of data, not a confirmed silence.');
+        'That is an absence of data, not a confirmed silence.'
+    );
   } else if (kind === 'stopped') {
-    cap.append(h('b', {}, `${fmtDuration(sil)} with no tick. `),
+    cap.append(
+      h('b', {}, `${fmtDuration(sil)} with no tick. `),
       `${fmtCount(ages.length)} report${ages.length === 1 ? '' : 's'} resolved here, the last on ` +
-      `${r.lastReportAt ? localFull(r.lastReportAt) : 'a date the server did not record'}, and nothing since. ` +
-      'Coverage existed and then ceased.');
+        `${r.lastReportAt ? localFull(r.lastReportAt) : 'a date the server did not record'}, and nothing since. ` +
+        'Coverage existed and then ceased.'
+    );
   } else {
-    cap.append(h('b', {}, `Last arrival ${fmtDuration(sil)} ago. `),
-      `${fmtCount(ages.length)} report${ages.length === 1 ? '' : 's'} resolved here. This settlement is still being heard from.`);
+    cap.append(
+      h('b', {}, `Last arrival ${fmtDuration(sil)} ago. `),
+      `${fmtCount(ages.length)} report${ages.length === 1 ? '' : 's'} resolved here. This settlement is still being heard from.`
+    );
   }
   wrap.append(cap);
   if (undated > 0) {
-    wrap.append(h('p', { class: 'tl-cap na' },
-      `${undated} report${undated === 1 ? ' has' : 's have'} no publish time on record and could not be placed on this line.`));
+    wrap.append(
+      h(
+        'p',
+        { class: 'tl-cap na' },
+        `${undated} report${undated === 1 ? ' has' : 's have'} no publish time on record and could not be placed on this line.`
+      )
+    );
   }
   return wrap;
 }
 
 function mathBlock(r, sb) {
   const blk = h('div', { class: 'ev-block' }, h('h4', {}, 'How the number was reached'));
-  if (!r) { blk.append(h('p', { class: 'unknown' }, 'No scored row for this settlement.')); return blk; }
-  const lambda = sb && sb.lambdaPerHour !== null && sb.lambdaPerHour !== undefined
-    ? sb.lambdaPerHour : r.lambdaPerHour;
+  if (!r) {
+    blk.append(h('p', { class: 'unknown' }, 'No scored row for this settlement.'));
+    return blk;
+  }
+  const lambda =
+    sb && sb.lambdaPerHour !== null && sb.lambdaPerHour !== undefined
+      ? sb.lambdaPerHour
+      : r.lambdaPerHour;
   const surv = sb ? sb.survivalProbability : null;
   const fit = sb?.fitBasis ?? r.fitBasis ?? null;
   const cohort = sb?.cohortKey ?? r.cohortKey ?? null;
@@ -1127,16 +1514,22 @@ function mathBlock(r, sb) {
   const lines = [
     `λ  = 1 / expectedGapHours = ${fmtLambda(lambda)}`.padEnd(46) +
       `fitBasis: ${fit ?? 'not reported'}${cohort ? ` (${cohort}${gaps !== null ? `, ${gaps} gaps` : ''})` : ''}`,
-    `P(gap ≥ ${fmtHours(r.silenceHours)}) = exp(−λ·t) = ${surv === null || surv === undefined ? 'not reported' : fmtNum(surv, 6)}`.padEnd(46) + 'survivalProbability',
+    `P(gap ≥ ${fmtHours(r.silenceHours)}) = exp(−λ·t) = ${surv === null || surv === undefined ? 'not reported' : fmtNum(surv, 6)}`.padEnd(
+      46
+    ) + 'survivalProbability',
     `surprisal      = −ln P = λ·t = ${fmtNum(r.surprisal, 4)}`.padEnd(46) + 'surprisalFormula',
-    `Gi* z          = ${fmtZ(r.giZScore)}   (threshold ${fmtNum(sb?.giThreshold ?? 1.96, 2)})`.padEnd(46) +
+    `Gi* z          = ${fmtZ(r.giZScore)}   (threshold ${fmtNum(sb?.giThreshold ?? 1.96, 2)})`.padEnd(
+      46
+    ) +
       `ownZ ${fmtZ(r.ownZScore)} · neighbourZ ${fmtZ(r.neighborZScore)} · n=${fmtCount(r.neighborCount)}`
   ];
   blk.append(h('pre', { class: 'formula' }, lines.join('\n')));
   if (sb && sb.method) {
     blk.append(h('p', { class: 'method' }, h('b', {}, 'Method '), sb.method));
   } else {
-    blk.append(h('p', { class: 'method' }, h('b', {}, 'Method '), 'not returned by the server for this row.'));
+    blk.append(
+      h('p', { class: 'method' }, h('b', {}, 'Method '), 'not returned by the server for this row.')
+    );
   }
   blk.append(h('p', { class: 'det-line' }, 'Deterministic. No LLM touched these numbers.'));
   return blk;
@@ -1150,18 +1543,24 @@ function unknownBlock(r, d) {
     p.append(
       h('strong', {}, 'No data reached us. '),
       `No report has ever resolved to ${r.name}. Its expected reporting rate is borrowed from cohort ` +
-      `${r.cohortKey || 'unknown'} (${r.fitBasis || 'unreported'} fit` +
-      `${r.cohortSampleGaps !== undefined ? `, ${r.cohortSampleGaps} observed gaps` : ''}), not measured here. ` +
-      `We do not know whether ${r.name} is quiet, unreachable, or simply unreported. Nothing on this screen ` +
-      `is a confirmation that anything happened there.`);
+        `${r.cohortKey || 'unknown'} (${r.fitBasis || 'unreported'} fit` +
+        `${r.cohortSampleGaps !== undefined ? `, ${r.cohortSampleGaps} observed gaps` : ''}), not measured here. ` +
+        `We do not know whether ${r.name} is quiet, unreachable, or simply unreported. Nothing on this screen ` +
+        `is a confirmation that anything happened there.`
+    );
   } else if (r) {
-    const n = (S.state && S.state.sources.length) || (d && Array.isArray(d.reports) ? new Set(d.reports.map((x) => x.sourceName)).size : 0);
+    const n =
+      (S.state && S.state.sources.length) ||
+      (d && Array.isArray(d.reports) ? new Set(d.reports.map((x) => x.sourceName)).size : 0);
     p.append(
       `Silence means no report has reached us since ${r.lastReportAt ? localFull(r.lastReportAt) : 'the last resolved report'}. ` +
-      `It is not a confirmation that this place went quiet. Coverage is limited to the ${n || 'listed'} sources ` +
-      `feeding this run; a gap in our sources looks identical to a gap on the ground.`);
+        `It is not a confirmation that this place went quiet. Coverage is limited to the ${n || 'listed'} sources ` +
+        `feeding this run; a gap in our sources looks identical to a gap on the ground.`
+    );
   } else {
-    p.append('Silence here means no report reached us. It is not a confirmation that this place is quiet.');
+    p.append(
+      'Silence here means no report reached us. It is not a confirmation that this place is quiet.'
+    );
   }
   blk.append(p);
   return blk;
@@ -1171,30 +1570,52 @@ function reportsBlock(d) {
   const blk = h('div', { class: 'ev-block' }, h('h4', {}, 'Reports behind this'));
   const reports = Array.isArray(d.reports) ? d.reports : [];
   if (!reports.length) {
-    blk.append(h('p', { class: 'unknown' },
-      h('strong', {}, 'No report has ever resolved to this settlement. '),
-      'There is nothing behind this row but the cohort baseline.'));
+    blk.append(
+      h(
+        'p',
+        { class: 'unknown' },
+        h('strong', {}, 'No report has ever resolved to this settlement. '),
+        'There is nothing behind this row but the cohort baseline.'
+      )
+    );
   } else {
     const list = h('div', { class: 'rep-list' });
     for (const rep of reports) {
       const tier = rep.triage && rep.triage.tier;
-      const item = h('div', { class: `rep${tier === 3 ? ' t3' : ''}` },
-        h('div', { class: 'rep-top' },
+      const item = h(
+        'div',
+        { class: `rep${tier === 3 ? ' t3' : ''}` },
+        h(
+          'div',
+          { class: 'rep-top' },
           h('span', {}, rep.sourceName || 'unnamed source'),
           h('span', { class: 'chip chip-reports' }, rep.sourceType || 'type not recorded'),
-          h('span', {
-            class: `tier${tier === 3 ? ' t3' : ''}`,
-            title: tier === 3 ? 'Tier 3 — LLM fallback classification. Reaching this tier is itself a failure signal.' : `Triage tier ${tier ?? '—'}`
-          }, `T${tier ?? '?'}`),
+          h(
+            'span',
+            {
+              class: `tier${tier === 3 ? ' t3' : ''}`,
+              title:
+                tier === 3
+                  ? 'Tier 3 — LLM fallback classification. Reaching this tier is itself a failure signal.'
+                  : `Triage tier ${tier ?? '—'}`
+            },
+            `T${tier ?? '?'}`
+          ),
           h('span', {}, (rep.triage && rep.triage.category) || 'uncategorised'),
-          h('span', { title: rep.publishedAt || '' }, relTime(rep.publishedAt) || 'no publish time')),
+          h('span', { title: rep.publishedAt || '' }, relTime(rep.publishedAt) || 'no publish time')
+        ),
         // Only an absolute http(s) URL becomes a citation. A relative or
         // otherwise unusable one would resolve against our own origin and open a
         // second copy of the console instead of the article - a dead citation is
         // worse than plain text, so it renders as plain text.
         isCitableUrl(rep.url)
-          ? h('a', { href: rep.url, target: '_blank', rel: 'noopener noreferrer' }, rep.title || rep.url)
-          : h('span', {}, rep.title || 'untitled report'));
+          ? h(
+              'a',
+              { href: rep.url, target: '_blank', rel: 'noopener noreferrer' },
+              rep.title || rep.url
+            )
+          : h('span', {}, rep.title || 'untitled report')
+      );
       if (rep.triage && rep.triage.matchedOn) {
         item.append(h('div', { class: 'matched' }, `matched on ${rep.triage.matchedOn}`));
       }
@@ -1209,10 +1630,19 @@ function reportsBlock(d) {
     const dl = h('dl', { class: 'kv' });
     for (const c of clusters) {
       const members = Array.isArray(c.reportIds) ? c.reportIds.length : 0;
-      dl.append(h('dt', {}, c.id || 'cluster'),
-        h('dd', {}, `conf ${fmtNum(c.confidence, 2)} · diversity ${fmtCount(c.sourceTypeDiversity)} · ${members} member${members === 1 ? '' : 's'}`));
+      dl.append(
+        h('dt', {}, c.id || 'cluster'),
+        h(
+          'dd',
+          {},
+          `conf ${fmtNum(c.confidence, 2)} · diversity ${fmtCount(c.sourceTypeDiversity)} · ${members} member${members === 1 ? '' : 's'}`
+        )
+      );
       if (Number(c.confidence) === 0.5 && members === 1) {
-        dl.append(h('dt', {}, ''), h('dd', { class: 'na' }, 'Singleton — uncorroborated, not "confidently one event".'));
+        dl.append(
+          h('dt', {}, ''),
+          h('dd', { class: 'na' }, 'Singleton — uncorroborated, not "confidently one event".')
+        );
       }
     }
     blk.append(dl);
@@ -1221,8 +1651,11 @@ function reportsBlock(d) {
 }
 
 function releaseBlock(rel) {
-  const blk = h('div', { class: 'ev-block' },
-    h('h4', {}, `Released to inform — approved by ${rel.approvedBy}`));
+  const blk = h(
+    'div',
+    { class: 'ev-block' },
+    h('h4', {}, `Released to inform — approved by ${rel.approvedBy}`)
+  );
   blk.append(shortlistTable(rel.shortlist));
   return blk;
 }
@@ -1232,16 +1665,37 @@ function shortlistTable(shortlist) {
   if (!list.length) {
     return h('p', { class: 'unknown' }, 'The server released an empty list. Nothing to show.');
   }
-  const t = h('table', { class: 'shortlist' },
+  const t = h(
+    'table',
+    { class: 'shortlist' },
     h('caption', {}, 'ordering: alphabetical-by-district (non-preferential)'),
-    h('thead', {}, h('tr', {},
-      h('th', { scope: 'col' }, 'Committee'), h('th', { scope: 'col' }, 'District'),
-      h('th', { scope: 'col' }, 'Settlements'), h('th', { scope: 'col' }, 'Population'))),
-    h('tbody', {}, list.map((s) => h('tr', {},
-      h('td', {}, s.name ?? s.committee ?? '—'),
-      h('td', {}, s.district ?? '—'),
-      h('td', {}, fmtCount(s.settlementsInDistrict)),
-      h('td', {}, fmtInt(s.populationInDistrict))))));
+    h(
+      'thead',
+      {},
+      h(
+        'tr',
+        {},
+        h('th', { scope: 'col' }, 'Committee'),
+        h('th', { scope: 'col' }, 'District'),
+        h('th', { scope: 'col' }, 'Settlements'),
+        h('th', { scope: 'col' }, 'Population')
+      )
+    ),
+    h(
+      'tbody',
+      {},
+      list.map((s) =>
+        h(
+          'tr',
+          {},
+          h('td', {}, s.name ?? s.committee ?? '—'),
+          h('td', {}, s.district ?? '—'),
+          h('td', {}, fmtCount(s.settlementsInDistrict)),
+          h('td', {}, fmtInt(s.populationInDistrict))
+        )
+      )
+    )
+  );
   return t;
 }
 
@@ -1263,32 +1717,48 @@ function renderCheckpoint(force) {
   if (!S.state) {
     el.cpLeadLine.append('Waiting for the first state…');
   } else if (pend.length) {
-    el.cpLeadLine.append(h('span', { class: 'n' }, String(pend.length)),
-      ` decision${pend.length === 1 ? '' : 's'} ${pend.length === 1 ? 'is' : 'are'} waiting on a named human.`);
+    el.cpLeadLine.append(
+      h('span', { class: 'n' }, String(pend.length)),
+      ` decision${pend.length === 1 ? '' : 's'} ${pend.length === 1 ? 'is' : 'are'} waiting on a named human.`
+    );
   } else {
     el.cpLeadLine.append('No decisions are pending.');
   }
 
-  const sig = JSON.stringify([!!S.state, S.showAllDecided, minuteBucket(),
+  const sig = JSON.stringify([
+    !!S.state,
+    S.showAllDecided,
+    minuteBucket(),
     pend.map((i) => [i.id, i.kind, i.title, i.settlementId, i.createdAt]),
-    done.map((i) => [i.id, i.status, i.approvedBy, i.decidedAt])]);
+    done.map((i) => [i.id, i.status, i.approvedBy, i.decidedAt])
+  ]);
   if (!force && sig === cpSig) return;
   const firstPaint = cpSig === '';
   cpSig = sig;
 
   clear(box);
-  if (!S.state) { box.append(skeletonRows(3)); return; }
+  if (!S.state) {
+    box.append(skeletonRows(3));
+    return;
+  }
 
   box.append(h('div', { class: 'cp-sub' }, `Waiting on a human — ${pend.length}`));
   if (!pend.length) {
-    box.append(emptyStateOk('✓', 'Nothing is waiting on a human',
-      "Escalations appear here when a settlement's silence clears the escalation gate. " +
-      'Nothing becomes actionable until a named human signs for it, and that name cannot be edited afterwards.'));
+    box.append(
+      emptyStateOk(
+        '✓',
+        'Nothing is waiting on a human',
+        "Escalations appear here when a settlement's silence clears the escalation gate. " +
+          'Nothing becomes actionable until a named human signs for it, and that name cannot be edited afterwards.'
+      )
+    );
   } else {
     // One ruled surface ordered by the server's own rank — not N equal cards.
     const ordered = pend.slice().sort((a, b) => {
-      const ra = rowById(a.settlementId), rb = rowById(b.settlementId);
-      const na = Number(ra && ra.rank), nb = Number(rb && rb.rank);
+      const ra = rowById(a.settlementId),
+        rb = rowById(b.settlementId);
+      const na = Number(ra && ra.rank),
+        nb = Number(rb && rb.rank);
       if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
       return Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0);
     });
@@ -1297,48 +1767,89 @@ function renderCheckpoint(force) {
     ordered.forEach((item, i) => {
       const amb = item.kind === 'ambiguous-match';
       const row = item.settlementId ? rowById(item.settlementId) : null;
-      const btn = h('button', {
-        class: `cp-row${animate ? ' enter' : ''}`, type: 'button', 'data-cp': item.id,
-        onclick: () => openModal(item.id)
-      },
+      const btn = h(
+        'button',
+        {
+          class: `cp-row${animate ? ' enter' : ''}`,
+          type: 'button',
+          'data-cp': item.id,
+          onclick: () => openModal(item.id)
+        },
         h('span', { class: 'idx' }, row && row.rank !== undefined ? `#${row.rank}` : String(i + 1)),
-        h('span', {},
+        h(
+          'span',
+          {},
           h('span', { class: 't' }, item.title || '(no title recorded)'),
-          h('span', { class: 'm' },
+          h(
+            'span',
+            { class: 'm' },
             h('span', { class: 'kind' }, amb ? '◆ AMBIGUOUS MATCH' : '▮ ESCALATION'),
-            ` · ${row ? `${row.name}, ${row.district}` : (item.settlementId || 'no settlement resolved')}` +
-            ` · raised ${relTime(item.createdAt) || 'time not recorded'}`)),
-        h('span', { class: 'go' }, 'Review and decide →'));
-      if (animate) { btn.style.setProperty('--i', String(i)); btn.style.setProperty('--stg', `${step}ms`); }
+            ` · ${row ? `${row.name}, ${row.district}` : item.settlementId || 'no settlement resolved'}` +
+              ` · raised ${relTime(item.createdAt) || 'time not recorded'}`
+          )
+        ),
+        h('span', { class: 'go' }, 'Review and decide →')
+      );
+      if (animate) {
+        btn.style.setProperty('--i', String(i));
+        btn.style.setProperty('--stg', `${step}ms`);
+      }
       box.append(btn);
     });
   }
 
   box.append(h('div', { class: 'cp-sub' }, `Decided — ${done.length}`));
   if (!done.length) {
-    box.append(h('p', { class: 'helper', style: 'padding:8px 16px' }, 'No decisions recorded yet.'));
+    box.append(
+      h('p', { class: 'helper', style: 'padding:8px 16px' }, 'No decisions recorded yet.')
+    );
     return;
   }
-  const ordered = done.slice().sort((a, b) => Date.parse(b.decidedAt || 0) - Date.parse(a.decidedAt || 0));
+  const ordered = done
+    .slice()
+    .sort((a, b) => Date.parse(b.decidedAt || 0) - Date.parse(a.decidedAt || 0));
   const shown = S.showAllDecided ? ordered : ordered.slice(0, 8);
   for (const item of shown) {
     const ok = item.status === 'approved';
-    box.append(h('button', {
-      class: `cp-decided ${ok ? 'ok' : 'no'}`, type: 'button',
-      onclick: () => openModal(item.id, true)
-    },
-      h('span', { class: 'who' },
-        h('span', { 'aria-hidden': 'true' }, ok ? '✓ ' : '✕ '),
-        `${ok ? 'Approved' : 'Rejected'} by ${item.approvedBy || 'name not recorded'}`),
-      h('span', { class: 't' }, item.title || '(no title recorded)'),
-      h('span', { class: 'when', title: item.decidedAt || '' },
-        relTime(item.decidedAt) || 'time not recorded')));
+    box.append(
+      h(
+        'button',
+        {
+          class: `cp-decided ${ok ? 'ok' : 'no'}`,
+          type: 'button',
+          onclick: () => openModal(item.id, true)
+        },
+        h(
+          'span',
+          { class: 'who' },
+          h('span', { 'aria-hidden': 'true' }, ok ? '✓ ' : '✕ '),
+          `${ok ? 'Approved' : 'Rejected'} by ${item.approvedBy || 'name not recorded'}`
+        ),
+        h('span', { class: 't' }, item.title || '(no title recorded)'),
+        h(
+          'span',
+          { class: 'when', title: item.decidedAt || '' },
+          relTime(item.decidedAt) || 'time not recorded'
+        )
+      )
+    );
   }
   if (ordered.length > shown.length) {
-    box.append(h('button', {
-      class: 'btn btn-sm', type: 'button', style: 'margin:8px 16px',
-      onclick: () => { S.showAllDecided = true; renderCheckpoint(true); }
-    }, `Show all ${ordered.length} decided`));
+    box.append(
+      h(
+        'button',
+        {
+          class: 'btn btn-sm',
+          type: 'button',
+          style: 'margin:8px 16px',
+          onclick: () => {
+            S.showAllDecided = true;
+            renderCheckpoint(true);
+          }
+        },
+        `Show all ${ordered.length} decided`
+      )
+    );
   }
 }
 
@@ -1376,53 +1887,91 @@ let actSig = '';
 function renderActivity(force) {
   const list = el.activityList;
   if (!S.state && !S.local.length) {
-    if (actSig !== 'skel') { actSig = 'skel'; clear(list); list.append(skeletonRows(5)); }
+    if (actSig !== 'skel') {
+      actSig = 'skel';
+      clear(list);
+      list.append(skeletonRows(5));
+    }
     return;
   }
 
   let items = mergedFeed();
-  if (S.actFilter === 'incidents') items = items.filter((i) => i._src === 'server' && i.kind !== 'heal');
-  else if (S.actFilter === 'decisions') items = items.filter((i) => /approved by|rejected by/i.test(i.message || ''));
-  else if (S.actFilter === 'pipeline') items = items.filter((i) => i._src === 'local' || i.kind === 'degraded-source');
+  if (S.actFilter === 'incidents')
+    items = items.filter((i) => i._src === 'server' && i.kind !== 'heal');
+  else if (S.actFilter === 'decisions')
+    items = items.filter((i) => /approved by|rejected by/i.test(i.message || ''));
+  else if (S.actFilter === 'pipeline')
+    items = items.filter((i) => i._src === 'local' || i.kind === 'degraded-source');
 
   const totalMatched = items.length;
   items = items.slice(0, 80);
-  const sig = JSON.stringify([S.actFilter, totalMatched, items.map((i) => i.id || i.at + i.message)]);
+  const sig = JSON.stringify([
+    S.actFilter,
+    totalMatched,
+    items.map((i) => i.id || i.at + i.message)
+  ]);
   if (!force && sig === actSig) return;
   actSig = sig;
   clear(list);
 
   el.actCount.textContent = totalMatched
-    ? (totalMatched > items.length ? `showing ${items.length} of ${totalMatched}` : `${totalMatched} entries`)
+    ? totalMatched > items.length
+      ? `showing ${items.length} of ${totalMatched}`
+      : `${totalMatched} entries`
     : '';
 
   if (!items.length) {
-    list.append(h('li', { style: 'display:block' }, emptyState('·', 'No activity yet',
-      'Pipeline runs, degraded sources, LLM fallbacks and human decisions all land here.')));
+    list.append(
+      h(
+        'li',
+        { style: 'display:block' },
+        emptyState(
+          '·',
+          'No activity yet',
+          'Pipeline runs, degraded sources, LLM fallbacks and human decisions all land here.'
+        )
+      )
+    );
     return;
   }
 
   for (const item of items) {
-    const kind = item._src === 'local' ? 'local' : (item.kind || 'local');
+    const kind = item._src === 'local' ? 'local' : item.kind || 'local';
     const meta = INCIDENT_KINDS[kind] || INCIDENT_KINDS.local;
-    const li = h('li', { class: `k-${kind}` },
+    const li = h(
+      'li',
+      { class: `k-${kind}` },
       h('span', { class: 't', title: item.at || '' }, clockTime(item.at)),
       h('span', { class: 'g', 'aria-hidden': 'true' }, meta.glyph),
-      h('span', { class: 'm' },
+      h(
+        'span',
+        { class: 'm' },
         h('span', { class: 'lbl' }, meta.label),
         item.message || '(no message)',
         item.detail && item.detail.simulated
-          ? h('span', { class: 'chip chip-sim', style: 'margin-left:6px' }, 'SIMULATED') : null));
+          ? h('span', { class: 'chip chip-sim', style: 'margin-left:6px' }, 'SIMULATED')
+          : null
+      )
+    );
     if (item.detail && Object.keys(item.detail).length) {
-      const det = h('details', {}, h('summary', {}, 'detail'),
-        h('pre', { class: 'raw' }, JSON.stringify(item.detail, null, 2)));
+      const det = h(
+        'details',
+        {},
+        h('summary', {}, 'detail'),
+        h('pre', { class: 'raw' }, JSON.stringify(item.detail, null, 2))
+      );
       li.append(det);
     }
     list.append(li);
   }
   if (totalMatched > items.length) {
-    list.append(h('li', { class: 'overflow-note', style: 'display:block' },
-      `${totalMatched - items.length} older entries are not shown. The full record is in the API response.`));
+    list.append(
+      h(
+        'li',
+        { class: 'overflow-note', style: 'display:block' },
+        `${totalMatched - items.length} older entries are not shown. The full record is in the API response.`
+      )
+    );
   }
 }
 
@@ -1435,7 +1984,9 @@ function renderSources() {
   const box = el.sourceChips;
   if (!S.state) {
     if (srcSig !== 'skel') {
-      srcSig = 'skel'; clear(box); clear(el.sourceAgg);
+      srcSig = 'skel';
+      clear(box);
+      clear(el.sourceAgg);
       for (let i = 0; i < 4; i++) {
         box.append(h('span', { class: 'skel', style: 'height:16px;margin:5px 0' }));
       }
@@ -1445,39 +1996,61 @@ function renderSources() {
   }
 
   const list = S.state.sources;
-  const sig = JSON.stringify([minuteBucket(),
-    list.map((x) => [x.name, x.status, x.sourceType, x.lastFetchAt]), S.state.stats.reportCount]);
+  const sig = JSON.stringify([
+    minuteBucket(),
+    list.map((x) => [x.name, x.status, x.sourceType, x.lastFetchAt]),
+    S.state.stats.reportCount
+  ]);
   if (sig === srcSig) return;
   srcSig = sig;
   clear(box);
   clear(el.sourceAgg);
   if (!list.length) {
     const anyReports = Number(S.state.stats.reportCount) > 0;
-    box.append(h('div', { class: 'src s-degraded' },
-      h('span', { class: 'dot', 'aria-hidden': 'true' }, '▲'),
-      h('span', { class: 'nm' }, anyReports
-        ? 'Sources not reported by this run'
-        : 'No sources registered yet — run the pipeline.'),
-      h('span', { class: 'st' }, 'unknown')));
+    box.append(
+      h(
+        'div',
+        { class: 'src s-degraded' },
+        h('span', { class: 'dot', 'aria-hidden': 'true' }, '▲'),
+        h(
+          'span',
+          { class: 'nm' },
+          anyReports
+            ? 'Sources not reported by this run'
+            : 'No sources registered yet — run the pipeline.'
+        ),
+        h('span', { class: 'st' }, 'unknown')
+      )
+    );
     el.sbSources.textContent = 'sources not reported';
     return;
   }
-  let live = 0, latest = null;
+  let live = 0,
+    latest = null;
   for (const s of list) {
     const st = statusOf(s.status);
     if (s.status === 'live' || s.status === 'ok') live++;
-    if (s.lastFetchAt && (!latest || Date.parse(s.lastFetchAt) > Date.parse(latest))) latest = s.lastFetchAt;
-    box.append(h('div', {
-      class: `src ${st.cls}`,
-      title: s.lastFetchAt ? `last fetch ${s.lastFetchAt}` : 'no fetch recorded'
-    },
-      h('span', { class: 'dot', 'aria-hidden': 'true' }, st.glyph),
-      h('span', { class: 'nm' }, s.name || 'unnamed source',
-        h('span', { class: 'ty' }, ` · ${s.sourceType || 'type not recorded'}`)),
-      h('span', { class: 'st' }, s.status || 'unknown')));
+    if (s.lastFetchAt && (!latest || Date.parse(s.lastFetchAt) > Date.parse(latest)))
+      latest = s.lastFetchAt;
+    box.append(
+      h(
+        'div',
+        {
+          class: `src ${st.cls}`,
+          title: s.lastFetchAt ? `last fetch ${s.lastFetchAt}` : 'no fetch recorded'
+        },
+        h('span', { class: 'dot', 'aria-hidden': 'true' }, st.glyph),
+        h(
+          'span',
+          { class: 'nm' },
+          s.name || 'unnamed source',
+          h('span', { class: 'ty' }, ` · ${s.sourceType || 'type not recorded'}`)
+        ),
+        h('span', { class: 'st' }, s.status || 'unknown')
+      )
+    );
   }
-  el.sourceAgg.textContent =
-    `${live} of ${list.length} live · last fetch ${latest ? (relTime(latest) || '—') : 'not recorded'}`;
+  el.sourceAgg.textContent = `${live} of ${list.length} live · last fetch ${latest ? relTime(latest) || '—' : 'not recorded'}`;
   el.sbSources.textContent = `${live}/${list.length} sources live`;
 }
 
@@ -1496,13 +2069,23 @@ let modal = null;
 
 function openModal(itemId, readOnly = false) {
   const item = (S.state ? S.state.checkpoint : []).find((i) => i.id === itemId);
-  if (!item) { toast('That checkpoint item is no longer in the queue.', 'warn'); pollState(); return; }
-  if (modal) { swapModal(item, readOnly); return; }
+  if (!item) {
+    toast('That checkpoint item is no longer in the queue.', 'warn');
+    pollState();
+    return;
+  }
+  if (modal) {
+    swapModal(item, readOnly);
+    return;
+  }
 
   const opener = document.activeElement;
   const scrim = h('div', { class: 'scrim' });
   const dlg = h('div', {
-    class: 'dialog', role: 'dialog', 'aria-modal': 'true', tabindex: '-1',
+    class: 'dialog',
+    role: 'dialog',
+    'aria-modal': 'true',
+    tabindex: '-1',
     'aria-label': `Human Checkpoint. ${item.title || ''}`
   });
   scrim.append(dlg);
@@ -1511,7 +2094,11 @@ function openModal(itemId, readOnly = false) {
   for (const node of Array.from(document.body.children)) {
     if (node === el.modalRoot) continue;
     node.setAttribute('aria-hidden', 'true');
-    try { node.inert = true; } catch { /* older engines */ }
+    try {
+      node.inert = true;
+    } catch {
+      /* older engines */
+    }
   }
 
   modal = { scrim, dlg, item, readOnly, opener, submitting: false, decided: null, shortlist: null };
@@ -1547,7 +2134,11 @@ function closeModal(reason) {
   for (const node of Array.from(document.body.children)) {
     if (node === el.modalRoot) continue;
     node.removeAttribute('aria-hidden');
-    try { node.inert = false; } catch { /* older engines */ }
+    try {
+      node.inert = false;
+    } catch {
+      /* older engines */
+    }
   }
   if (reason === 'escape' || reason === 'close') {
     if (item && item.status === 'pending') {
@@ -1560,18 +2151,30 @@ function closeModal(reason) {
 }
 
 function onModalKey(ev) {
-  if (ev.key === 'Escape') { ev.preventDefault(); closeModal('escape'); return; }
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    closeModal('escape');
+    return;
+  }
   if (ev.key !== 'Tab') return;
   const f = focusables(modal.dlg);
   if (!f.length) return;
-  const first = f[0], last = f[f.length - 1];
-  if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
-  else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+  const first = f[0],
+    last = f[f.length - 1];
+  if (ev.shiftKey && document.activeElement === first) {
+    ev.preventDefault();
+    last.focus();
+  } else if (!ev.shiftKey && document.activeElement === last) {
+    ev.preventDefault();
+    first.focus();
+  }
 }
 
 function focusables(root) {
-  return $$('a[href], button:not([disabled]), input:not([disabled]), summary, [tabindex]:not([tabindex="-1"])', root)
-    .filter((n) => n === document.activeElement || n.getClientRects().length > 0);
+  return $$(
+    'a[href], button:not([disabled]), input:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    root
+  ).filter((n) => n === document.activeElement || n.getClientRects().length > 0);
 }
 
 function renderModal() {
@@ -1584,27 +2187,49 @@ function renderModal() {
   clear(dlg);
 
   // ── header ──
-  const kicker = h('div', { class: 'dlg-kicker' },
+  const kicker = h(
+    'div',
+    { class: 'dlg-kicker' },
     ro
       ? h('span', { class: `pill-decided${item.status === 'approved' ? '' : ' no'}` }, 'DECIDED')
       : h('span', {}, `HUMAN CHECKPOINT · ${idx >= 0 ? idx + 1 : 1} of ${pend.length} pending`),
-    h('button', {
-      class: 'btn btn-sm', type: 'button',
-      onclick: () => closeModal('close')
-    }, ro ? 'Close' : 'Close without deciding'));
+    h(
+      'button',
+      {
+        class: 'btn btn-sm',
+        type: 'button',
+        onclick: () => closeModal('close')
+      },
+      ro ? 'Close' : 'Close without deciding'
+    )
+  );
 
-  const head = h('div', { class: 'dlg-head' }, kicker,
+  const head = h(
+    'div',
+    { class: 'dlg-head' },
+    kicker,
     h('h2', { class: 'dlg-title' }, item.title || '(no title recorded)'),
-    h('p', { class: `dlg-kind${amb ? ' amb' : ''}` },
+    h(
+      'p',
+      { class: `dlg-kind${amb ? ' amb' : ''}` },
       h('b', {}, amb ? '◆ AMBIGUOUS MATCH' : '▲ ESCALATION'),
-      ` · ${item.settlementId || 'no settlement resolved'} · raised ${relTime(item.createdAt) || 'time not recorded'}`));
+      ` · ${item.settlementId || 'no settlement resolved'} · raised ${relTime(item.createdAt) || 'time not recorded'}`
+    )
+  );
   dlg.append(head);
 
   if (ro) {
-    dlg.append(h('div', { class: 'ro-banner' },
-      `Decided by ${item.approvedBy || 'name not recorded'} on ${localFull(item.decidedAt)}. This record cannot be changed.`));
+    dlg.append(
+      h(
+        'div',
+        { class: 'ro-banner' },
+        `Decided by ${item.approvedBy || 'name not recorded'} on ${localFull(item.decidedAt)}. This record cannot be changed.`
+      )
+    );
   } else {
-    dlg.append(h('div', { class: 'rule-bar' }, h('span', { 'aria-hidden': 'true' }, 'ⓘ'), RULE_BAR));
+    dlg.append(
+      h('div', { class: 'rule-bar' }, h('span', { 'aria-hidden': 'true' }, 'ⓘ'), RULE_BAR)
+    );
   }
 
   // ── body ──
@@ -1629,26 +2254,52 @@ function renderModal() {
       rb.querySelector('h4')?.remove();
       sec.append(rb);
     } else if (item.settlementId) {
-      sec.append(h('p', { class: 'helper' }, 'Loading the reports the server holds for this settlement…'));
+      sec.append(
+        h('p', { class: 'helper' }, 'Loading the reports the server holds for this settlement…')
+      );
     } else {
-      sec.append(h('p', { class: 'unknown' }, 'This item is not tied to a settlement, so there are no reports behind it.'));
+      sec.append(
+        h(
+          'p',
+          { class: 'unknown' },
+          'This item is not tied to a settlement, so there are no reports behind it.'
+        )
+      );
     }
     body.append(sec);
   }
 
-  body.append(h('details', { class: 'why' },
-    h('summary', {}, 'How the number was reached',
-      h('span', { class: 'hint' }, 'λ, surprisal, Gi* — computed server-side')),
-    h('div', { class: 'why-body' }, (() => {
-      const inner = mathBlock(row || evAsRow(ev), modal.breakdown || null);
-      inner.classList.remove('ev-block');
-      inner.querySelector('h4')?.remove();
-      return inner;
-    })())));
+  body.append(
+    h(
+      'details',
+      { class: 'why' },
+      h(
+        'summary',
+        {},
+        'How the number was reached',
+        h('span', { class: 'hint' }, 'λ, surprisal, Gi* — computed server-side')
+      ),
+      h(
+        'div',
+        { class: 'why-body' },
+        (() => {
+          const inner = mathBlock(row || evAsRow(ev), modal.breakdown || null);
+          inner.classList.remove('ev-block');
+          inner.querySelector('h4')?.remove();
+          return inner;
+        })()
+      )
+    )
+  );
 
-  body.append(h('details', {},
-    h('summary', {}, 'Show the exact evidence the server holds'),
-    h('pre', { class: 'raw' }, JSON.stringify(item, null, 2))));
+  body.append(
+    h(
+      'details',
+      {},
+      h('summary', {}, 'Show the exact evidence the server holds'),
+      h('pre', { class: 'raw' }, JSON.stringify(item, null, 2))
+    )
+  );
 
   if (modal.decided) body.append(successBlock());
   dlg.append(body);
@@ -1675,17 +2326,28 @@ function renderModal() {
           renderModal();
         }
       })
-      .catch(() => { if (modal) modal.detailPending = false; });
+      .catch(() => {
+        if (modal) modal.detailPending = false;
+      });
   }
 }
 
 function evAsRow(ev) {
   return {
-    name: ev.name, district: ev.district, silenceHours: ev.silenceHours,
-    expectedGapHours: ev.expectedGapHours, surprisal: ev.surprisal, giZScore: ev.giZScore,
-    ownZScore: ev.ownZScore, neighborZScore: ev.neighborZScore, neighborCount: ev.neighborCount,
-    coverageBasis: ev.coverageBasis, cohortKey: ev.cohortKey, fitBasis: ev.fitBasis,
-    lambdaPerHour: ev.lambdaPerHour, cohortSampleGaps: ev.cohortSampleGaps
+    name: ev.name,
+    district: ev.district,
+    silenceHours: ev.silenceHours,
+    expectedGapHours: ev.expectedGapHours,
+    surprisal: ev.surprisal,
+    giZScore: ev.giZScore,
+    ownZScore: ev.ownZScore,
+    neighborZScore: ev.neighborZScore,
+    neighborCount: ev.neighborCount,
+    coverageBasis: ev.coverageBasis,
+    cohortKey: ev.cohortKey,
+    fitBasis: ev.fitBasis,
+    lambdaPerHour: ev.lambdaPerHour,
+    cohortSampleGaps: ev.cohortSampleGaps
   };
 }
 
@@ -1693,7 +2355,8 @@ function observedKv(src, ev) {
   const dl = h('dl', { class: 'kv' });
   const put = (k, v, na) => dl.append(h('dt', {}, k), h('dd', { class: na ? 'na' : null }, v));
   if (src.name) put('Settlement', `${src.name}${src.district ? `, ${src.district}` : ''}`);
-  if (src.settlementId || ev.settlementId) put('Settlement id', src.settlementId || ev.settlementId);
+  if (src.settlementId || ev.settlementId)
+    put('Settlement id', src.settlementId || ev.settlementId);
   put('Last report', src.lastReportAt ? localFull(src.lastReportAt) : 'Never', !src.lastReportAt);
   put('Silent for', fmtHours(src.silenceHours));
   put('Expected gap', fmtHours(src.expectedGapHours));
@@ -1712,22 +2375,26 @@ function unknownParagraph(item, src) {
     const ev = item.evidence || {};
     p.append(
       `The match probability is ${fmtNum(ev.matchProbability ?? ev.probability ?? ev.p, 2)}, between the ` +
-      `auto-reject threshold (${fmtNum(ev.lowerThreshold, 2)}) and the auto-merge threshold ` +
-      `(${fmtNum(ev.upperThreshold, 2)}). The machine refuses to guess which of these is correct. ` +
-      `Merging two different places, or splitting one, both corrupt the ranking downstream.`);
+        `auto-reject threshold (${fmtNum(ev.lowerThreshold, 2)}) and the auto-merge threshold ` +
+        `(${fmtNum(ev.upperThreshold, 2)}). The machine refuses to guess which of these is correct. ` +
+        `Merging two different places, or splitting one, both corrupt the ranking downstream.`
+    );
   } else if (src.coverageBasis === 'cohort-cold-start') {
-    p.append(h('strong', {}, 'No data reached us. '),
+    p.append(
+      h('strong', {}, 'No data reached us. '),
       `No report has ever resolved to ${src.name || 'this settlement'}. Its expected reporting rate is ` +
-      `borrowed from cohort ${src.cohortKey || 'unknown'} (${src.fitBasis || 'unreported'} fit` +
-      `${src.cohortSampleGaps !== undefined ? `, ${src.cohortSampleGaps} observed gaps` : ''}), not measured here. ` +
-      `We do not know whether ${src.name || 'it'} is quiet, unreachable, or simply unreported. Nothing on this ` +
-      `screen is a confirmation that anything happened there.`);
+        `borrowed from cohort ${src.cohortKey || 'unknown'} (${src.fitBasis || 'unreported'} fit` +
+        `${src.cohortSampleGaps !== undefined ? `, ${src.cohortSampleGaps} observed gaps` : ''}), not measured here. ` +
+        `We do not know whether ${src.name || 'it'} is quiet, unreachable, or simply unreported. Nothing on this ` +
+        `screen is a confirmation that anything happened there.`
+    );
   } else {
     const n = (S.state && S.state.sources.length) || 0;
     p.append(
       `Silence means no report has reached us since ${src.lastReportAt ? localFull(src.lastReportAt) : 'the last resolved report'}. ` +
-      `It is not a confirmation that this place went quiet. Coverage is limited to the ${n || 'listed'} sources ` +
-      `feeding this run; a gap in our sources looks identical to a gap on the ground.`);
+        `It is not a confirmation that this place went quiet. Coverage is limited to the ${n || 'listed'} sources ` +
+        `feeding this run; a gap in our sources looks identical to a gap on the ground.`
+    );
   }
   return p;
 }
@@ -1754,7 +2421,9 @@ function candidatesBlock(ev) {
   const left = candidateLabel(ev.leftLabel ?? ev.aLabel ?? ev.a ?? ev.leftId ?? ev.aId ?? null);
   const right = candidateLabel(ev.rightLabel ?? ev.bLabel ?? ev.b ?? ev.rightId ?? ev.bId ?? null);
   if (!left && !right) {
-    wrap.append(h('p', { class: 'unknown' }, 'The server did not record the two candidates for this item.'));
+    wrap.append(
+      h('p', { class: 'unknown' }, 'The server did not record the two candidates for this item.')
+    );
     return wrap;
   }
   // Dedup records the undecidable window as `band: [lo, hi]`; the simulated item
@@ -1767,9 +2436,18 @@ function candidatesBlock(ev) {
   const dl = h('dl', { class: 'kv' });
   dl.append(h('dt', {}, 'Candidate A'), h('dd', {}, left ?? '—'));
   dl.append(h('dt', {}, 'Candidate B'), h('dd', {}, right ?? '—'));
-  dl.append(h('dt', {}, 'Match probability'), h('dd', {}, fmtNum(ev.matchProbability ?? ev.probability ?? ev.p, 2)));
-  dl.append(h('dt', {}, 'Undecidable band'),
-    h('dd', {}, lo === undefined && hi === undefined ? 'not recorded' : `${fmtNum(lo, 2)} … ${fmtNum(hi, 2)}`));
+  dl.append(
+    h('dt', {}, 'Match probability'),
+    h('dd', {}, fmtNum(ev.matchProbability ?? ev.probability ?? ev.p, 2))
+  );
+  dl.append(
+    h('dt', {}, 'Undecidable band'),
+    h(
+      'dd',
+      {},
+      lo === undefined && hi === undefined ? 'not recorded' : `${fmtNum(lo, 2)} … ${fmtNum(hi, 2)}`
+    )
+  );
   wrap.append(dl);
   if (ev.note) wrap.append(h('p', { class: 'method' }, ev.note));
   if (ev.reason) wrap.append(h('p', { class: 'method' }, ev.reason));
@@ -1777,24 +2455,40 @@ function candidatesBlock(ev) {
 }
 
 function decidedFooter() {
-  return h('div', { class: 'dlg-foot' },
-    h('div', { class: 'dlg-actions' },
+  return h(
+    'div',
+    { class: 'dlg-foot' },
+    h(
+      'div',
+      { class: 'dlg-actions' },
       pendingItems().length && modal.decided
-        ? h('button', {
-            class: 'btn btn-primary', type: 'button',
-            onclick: () => {
-              const next = pendingItems()[0];
-              if (next) swapModal(next, false); else closeModal('close');
-            }
-          }, 'Next pending item →')
+        ? h(
+            'button',
+            {
+              class: 'btn btn-primary',
+              type: 'button',
+              onclick: () => {
+                const next = pendingItems()[0];
+                if (next) swapModal(next, false);
+                else closeModal('close');
+              }
+            },
+            'Next pending item →'
+          )
         : null,
-      h('button', { class: 'btn', type: 'button', onclick: () => closeModal('close') }, 'Close')));
+      h('button', { class: 'btn', type: 'button', onclick: () => closeModal('close') }, 'Close')
+    )
+  );
 }
 
 function decisionFooter() {
   const input = h('input', {
-    type: 'text', id: 'approver', autocomplete: 'name', spellcheck: 'false',
-    placeholder: 'e.g. R. Gurung, District Duty Officer', 'aria-describedby': 'approver-help'
+    type: 'text',
+    id: 'approver',
+    autocomplete: 'name',
+    spellcheck: 'false',
+    placeholder: 'e.g. R. Gurung, District Duty Officer',
+    'aria-describedby': 'approver-help'
   });
   const help = h('p', { class: 'helper', id: 'approver-help' }, HELPER_DEFAULT);
   const announce = h('p', { class: 'vh', 'aria-live': 'polite' });
@@ -1802,14 +2496,28 @@ function decisionFooter() {
   // Both buttons are described by the uncertainty statement itself, so a screen
   // reader hears the limits of the evidence as part of the control it is about
   // to operate — the non-visual form of "on screen at the moment of signing".
-  const reject = h('button', {
-    class: 'btn btn-reject', type: 'button', 'aria-disabled': 'true',
-    'aria-describedby': 'sign-caveat'
-  }, h('span', { 'aria-hidden': 'true' }, '✕'), 'Reject — not actionable');
-  const approve = h('button', {
-    class: 'btn btn-approve', type: 'button', 'aria-disabled': 'true',
-    'aria-describedby': 'sign-caveat'
-  }, h('span', { 'aria-hidden': 'true' }, '✓'), 'Approve — release shortlist');
+  const reject = h(
+    'button',
+    {
+      class: 'btn btn-reject',
+      type: 'button',
+      'aria-disabled': 'true',
+      'aria-describedby': 'sign-caveat'
+    },
+    h('span', { 'aria-hidden': 'true' }, '✕'),
+    'Reject — not actionable'
+  );
+  const approve = h(
+    'button',
+    {
+      class: 'btn btn-approve',
+      type: 'button',
+      'aria-disabled': 'true',
+      'aria-describedby': 'sign-caveat'
+    },
+    h('span', { 'aria-hidden': 'true' }, '✓'),
+    'Approve — release shortlist'
+  );
 
   let wasEnabled = false;
   const sync = () => {
@@ -1839,7 +2547,12 @@ function decisionFooter() {
   };
   input.addEventListener('input', sync);
   // Enter must never be a path to an irreversible decision.
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); reject.focus(); } });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      reject.focus();
+    }
+  });
 
   const needName = () => {
     help.classList.add('err');
@@ -1849,7 +2562,10 @@ function decisionFooter() {
   };
 
   const submit = async (action, btn) => {
-    if (btn.getAttribute('aria-disabled') === 'true') { needName(); return; }
+    if (btn.getAttribute('aria-disabled') === 'true') {
+      needName();
+      return;
+    }
     if (modal.submitting) return;
     modal.submitting = true;
     const name = input.value.trim();
@@ -1860,10 +2576,15 @@ function decisionFooter() {
 
     let res;
     try {
-      res = await fetchJson(`/api/checkpoint/${encodeURIComponent(modal.item.id)}/${action}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvedBy: name })
-      }, 20000);
+      res = await fetchJson(
+        `/api/checkpoint/${encodeURIComponent(modal.item.id)}/${action}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approvedBy: name })
+        },
+        20000
+      );
     } catch (err) {
       res = { ok: false, status: 0 };
     }
@@ -1877,17 +2598,26 @@ function decisionFooter() {
       // A decision failure is never a toast — it must not be dismissible.
       help.classList.add('err');
       clear(help);
-      help.append(h('span', {}, 'Could not reach the server. '),
+      help.append(
+        h('span', {}, 'Could not reach the server. '),
         h('strong', {}, 'No decision was recorded.'),
-        h('span', {}, ' Check the connection and try again.'));
-      const retry = h('button', { class: 'btn btn-sm', type: 'button', onclick: () => submit(action, btn) }, 'Retry');
+        h('span', {}, ' Check the connection and try again.')
+      );
+      const retry = h(
+        'button',
+        { class: 'btn btn-sm', type: 'button', onclick: () => submit(action, btn) },
+        'Retry'
+      );
       help.append(' ', retry);
-      logLocal(`Checkpoint ${modal.item.id}: ${action} could not be sent. No decision was recorded.`);
+      logLocal(
+        `Checkpoint ${modal.item.id}: ${action} could not be sent. No decision was recorded.`
+      );
       return;
     }
     if (res.status === 400 && res.body && res.body.code === 'APPROVER_REQUIRED') {
       help.classList.add('err');
-      help.textContent = res.body.error ||
+      help.textContent =
+        res.body.error ||
         'A named human approver is required. Nothing in Signal Zero becomes actionable anonymously.';
       input.setAttribute('aria-invalid', 'true');
       input.focus();
@@ -1901,9 +2631,19 @@ function decisionFooter() {
     }
     if (res.status === 409) {
       const b = res.body || {};
-      modal.dlg.querySelector('.dlg-body').prepend(h('div', { class: 'conflict' },
-        `This item was already ${b.status || 'decided'}${b.approvedBy ? ` by ${b.approvedBy}` : ''}. Refreshing the queue.`));
-      for (const bt of [reject, approve]) { bt.setAttribute('aria-disabled', 'true'); bt.disabled = true; }
+      modal.dlg
+        .querySelector('.dlg-body')
+        .prepend(
+          h(
+            'div',
+            { class: 'conflict' },
+            `This item was already ${b.status || 'decided'}${b.approvedBy ? ` by ${b.approvedBy}` : ''}. Refreshing the queue.`
+          )
+        );
+      for (const bt of [reject, approve]) {
+        bt.setAttribute('aria-disabled', 'true');
+        bt.disabled = true;
+      }
       await pollState();
       const next = pendingItems()[0];
       if (next) swapModal(next, false);
@@ -1911,7 +2651,9 @@ function decisionFooter() {
     }
     if (!res.ok || !res.body || !res.body.ok) {
       help.classList.add('err');
-      help.textContent = (res.body && res.body.error) || `The server rejected the decision (HTTP ${res.status}). No decision was recorded.`;
+      help.textContent =
+        (res.body && res.body.error) ||
+        `The server rejected the decision (HTTP ${res.status}). No decision was recorded.`;
       return;
     }
 
@@ -1919,10 +2661,15 @@ function decisionFooter() {
     modal.decided = { status: item.status, approvedBy: item.approvedBy, decidedAt: item.decidedAt };
     modal.shortlist = Array.isArray(res.body.shortlist) ? res.body.shortlist : [];
     modal.item = { ...modal.item, ...item };
-    logLocal(`Checkpoint ${modal.item.id} ${item.status} by ${item.approvedBy}.`, { checkpointId: modal.item.id, status: item.status });
+    logLocal(`Checkpoint ${modal.item.id} ${item.status} by ${item.approvedBy}.`, {
+      checkpointId: modal.item.id,
+      status: item.status
+    });
     if (item.status === 'approved' && modal.item.settlementId) {
       S.releases.set(modal.item.settlementId, {
-        approvedBy: item.approvedBy, decidedAt: item.decidedAt, shortlist: modal.shortlist
+        approvedBy: item.approvedBy,
+        decidedAt: item.decidedAt,
+        shortlist: modal.shortlist
       });
     }
     await pollState();
@@ -1941,21 +2688,34 @@ function decisionFooter() {
   const ev = modal.item.evidence || {};
   const row = modal.item.settlementId ? rowById(modal.item.settlementId) : null;
   const src = { ...ev, ...(row || {}) };
-  const caveat = h('p', { class: 'sign-note', id: 'sign-caveat', tabindex: '-1' },
-    h('b', {}, 'Before you sign: '), unknownParagraph(modal.item, src).textContent);
+  const caveat = h(
+    'p',
+    { class: 'sign-note', id: 'sign-caveat', tabindex: '-1' },
+    h('b', {}, 'Before you sign: '),
+    unknownParagraph(modal.item, src).textContent
+  );
 
-  const gate = h('p', { class: 'gate' },
-    'Both buttons stay unavailable until you type your name. Approve and reject carry equal weight.');
+  const gate = h(
+    'p',
+    { class: 'gate' },
+    'Both buttons stay unavailable until you type your name. Approve and reject carry equal weight.'
+  );
 
   // The rail is the choreography: a single 3px rule draws down the left edge of
   // the signing panel and stops at the caveat. It moves once, on a hard
   // ease-in-out with no overshoot, and it never repeats on its own.
-  return h('div', { class: 'dlg-foot' },
+  return h(
+    'div',
+    { class: 'dlg-foot' },
     h('span', { class: 'sign-rail', 'aria-hidden': 'true' }),
-    caveat, gate,
+    caveat,
+    gate,
     h('label', { for: 'approver' }, 'Your name (required, recorded permanently)'),
-    input, help, announce,
-    h('div', { class: 'dlg-actions' }, reject, approve));
+    input,
+    help,
+    announce,
+    h('div', { class: 'dlg-actions' }, reject, approve)
+  );
 }
 
 /**
@@ -1970,8 +2730,11 @@ function cueSignNote({ persist = false } = {}) {
   const note = modal.dlg.querySelector('.sign-note');
   if (!note) return;
   clearTimeout(signCue);
-  if (persist) { note.classList.add('is-cued'); return; }
-  if (reducedMotion()) return;   // already permanently emphasised by the stylesheet
+  if (persist) {
+    note.classList.add('is-cued');
+    return;
+  }
+  if (reducedMotion()) return; // already permanently emphasised by the stylesheet
   note.classList.remove('is-cued');
   // Force a reflow so the class can be re-applied and re-run in the same frame.
   void note.offsetWidth;
@@ -1984,15 +2747,25 @@ function successBlock() {
   const ok = d.status === 'approved';
   const blk = h('div', { class: `success${ok ? '' : ' no'}`, tabindex: '-1' });
   if (ok) {
-    blk.append(h('h4', {}, `Approved by ${d.approvedBy}`),
-      h('p', { class: 'method' },
+    blk.append(
+      h('h4', {}, `Approved by ${d.approvedBy}`),
+      h(
+        'p',
+        { class: 'method' },
         `at ${localFull(d.decidedAt)}. Released a list of ${modal.shortlist.length} district committees to inform. ` +
-        `This list is alphabetical and carries no order of preference.`),
-      shortlistTable(modal.shortlist));
+          `This list is alphabetical and carries no order of preference.`
+      ),
+      shortlistTable(modal.shortlist)
+    );
   } else {
-    blk.append(h('h4', {}, `Rejected by ${d.approvedBy}`),
-      h('p', { class: 'method' },
-        `at ${localFull(d.decidedAt)}. Nothing was released. The item stays in the record.`));
+    blk.append(
+      h('h4', {}, `Rejected by ${d.approvedBy}`),
+      h(
+        'p',
+        { class: 'method' },
+        `at ${localFull(d.decidedAt)}. Nothing was released. The item stays in the record.`
+      )
+    );
   }
   return blk;
 }
@@ -2002,11 +2775,17 @@ function successBlock() {
 // ══════════════════════════════════════════════════════════════════════════
 
 function emptyState(glyph, title, bodyText, action) {
-  const node = h('div', { class: 'empty' },
+  const node = h(
+    'div',
+    { class: 'empty' },
     h('span', { class: 'glyph', 'aria-hidden': 'true' }, glyph),
     h('h3', {}, title),
-    h('p', {}, bodyText));
-  if (action) node.append(h('button', { class: 'btn btn-sm', type: 'button', onclick: action.onClick }, action.label));
+    h('p', {}, bodyText)
+  );
+  if (action)
+    node.append(
+      h('button', { class: 'btn btn-sm', type: 'button', onclick: action.onClick }, action.label)
+    );
   return node;
 }
 function emptyStateOk(glyph, title, bodyText) {
@@ -2017,9 +2796,14 @@ function emptyStateOk(glyph, title, bodyText) {
 function skeletonRows(n) {
   const frag = document.createDocumentFragment();
   for (let i = 0; i < n; i++) {
-    frag.append(h('div', { class: 'skel-row' },
-      h('span', { class: 'skel', style: 'width:60%' }),
-      h('span', { class: 'skel', style: 'width:35%;height:9px' })));
+    frag.append(
+      h(
+        'div',
+        { class: 'skel-row' },
+        h('span', { class: 'skel', style: 'width:60%' }),
+        h('span', { class: 'skel', style: 'width:35%;height:9px' })
+      )
+    );
   }
   return frag;
 }
@@ -2031,7 +2815,8 @@ function skeletonRows(n) {
 function applyTheme(mode) {
   if (mode === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', mode);
-  for (const b of $$('[data-theme-set]')) b.setAttribute('aria-pressed', String(b.dataset.themeSet === mode));
+  for (const b of $$('[data-theme-set]'))
+    b.setAttribute('aria-pressed', String(b.dataset.themeSet === mode));
   safeLocal('sz-theme', mode);
   // The sky belongs to the theme; MapLibre paints it and cannot see a CSS token.
   if (mapCtl && mapCtl.refreshAtmosphere) mapCtl.refreshAtmosphere();
@@ -2045,9 +2830,12 @@ function applyTheme(mode) {
 const VIEWS = ['overview', 'decisions', 'settlement', 'activity'];
 // Which room owns each skip-link anchor.
 const ANCHOR_VIEW = {
-  'region-rank': 'overview', 'region-map': 'overview',
-  'region-checkpoint': 'decisions', 'region-evidence': 'settlement',
-  'region-activity': 'activity', 'region-sources': 'activity'
+  'region-rank': 'overview',
+  'region-map': 'overview',
+  'region-checkpoint': 'decisions',
+  'region-evidence': 'settlement',
+  'region-activity': 'activity',
+  'region-sources': 'activity'
 };
 
 function setView(name, opts = {}) {
@@ -2066,11 +2854,18 @@ function setView(name, opts = {}) {
     panel.classList.toggle('is-active', v === name);
     panel.hidden = v !== name;
   }
-  if (opts.focusPanel) { const p = $(`#view-${name}`); if (p) p.focus(); }
+  if (opts.focusPanel) {
+    const p = $(`#view-${name}`);
+    if (p) p.focus();
+  }
 
   const hash = `#v/${name}`;
   if (!opts.fromHash && location.hash !== hash) {
-    try { history.replaceState(null, '', hash); } catch { location.hash = hash; }
+    try {
+      history.replaceState(null, '', hash);
+    } catch {
+      location.hash = hash;
+    }
   }
   // MapLibre measures its canvas on resize; a pane that was display:none has
   // no size until the frame after it is shown.
@@ -2118,7 +2913,9 @@ function renderLegend() {
     const a = ANOMALY[key];
     const dot = h('span', { class: 'mk-dot', 'aria-hidden': 'true' });
     dot.dataset.anom = key;
-    rings.append(h('li', {}, h('span', { class: 'swwrap' }, dot), a.label === '—' ? a.short : a.label));
+    rings.append(
+      h('li', {}, h('span', { class: 'swwrap' }, dot), a.label === '—' ? a.short : a.label)
+    );
   }
   renderRingLegend();
 }
@@ -2137,15 +2934,39 @@ function renderRingLegend() {
     wrap.append(h('i', {}));
     return wrap;
   };
-  const block = h('div', { class: 'legend-block', id: 'legend-cadence' },
+  const block = h(
+    'div',
+    { class: 'legend-block', id: 'legend-cadence' },
     h('span', { class: 'legend-title' }, 'Reporting cadence'),
-    h('ul', { class: 'legend-rings lg-cad' },
-      h('li', {}, swatch('recent'), 'a full ring — reports still arriving, one cycle per expected interval'),
-      h('li', {}, swatch('stopped'), 'a broken arc with a notch — reports arrived, then stopped mid-cycle'),
-      h('li', {}, swatch('never'), 'a dashed ghost — no report has ever arrived, so no cycle ever started')),
-    h('p', { class: 'legend-cap' },
+    h(
+      'ul',
+      { class: 'legend-rings lg-cad' },
+      h(
+        'li',
+        {},
+        swatch('recent'),
+        'a full ring — reports still arriving, one cycle per expected interval'
+      ),
+      h(
+        'li',
+        {},
+        swatch('stopped'),
+        'a broken arc with a notch — reports arrived, then stopped mid-cycle'
+      ),
+      h(
+        'li',
+        {},
+        swatch('never'),
+        'a dashed ghost — no report has ever arrived, so no cycle ever started'
+      )
+    ),
+    h(
+      'p',
+      { class: 'legend-cap' },
       'Each ring runs at that settlement’s own fitted interval (1/λ), compressed for display. ' +
-      'The dark spreading around a marker grows with how long nothing has arrived.'));
+        'The dark spreading around a marker grows with how long nothing has arrived.'
+    )
+  );
   body.insertBefore(block, body.firstChild);
 }
 
@@ -2154,17 +2975,28 @@ function bind() {
   el.cbarAction.addEventListener('click', focusQueue);
   el.humanBandGo.addEventListener('click', focusQueue);
 
-  for (const b of $$('[data-theme-set]')) b.addEventListener('click', () => applyTheme(b.dataset.themeSet));
-  for (const b of $$('[data-filt]')) b.addEventListener('click', () => { S.filter = b.dataset.filt; syncFilterButtons(); renderRank(true); });
-  for (const b of $$('[data-act]')) b.addEventListener('click', () => {
-    S.actFilter = b.dataset.act;
-    for (const o of $$('[data-act]')) o.setAttribute('aria-pressed', String(o === b));
-    renderActivity(true);
-  });
-  for (const b of $$('[data-basemap]')) b.addEventListener('click', () => mapCtl && mapCtl.setBasemap(b.dataset.basemap));
+  for (const b of $$('[data-theme-set]'))
+    b.addEventListener('click', () => applyTheme(b.dataset.themeSet));
+  for (const b of $$('[data-filt]'))
+    b.addEventListener('click', () => {
+      S.filter = b.dataset.filt;
+      syncFilterButtons();
+      renderRank(true);
+    });
+  for (const b of $$('[data-act]'))
+    b.addEventListener('click', () => {
+      S.actFilter = b.dataset.act;
+      for (const o of $$('[data-act]')) o.setAttribute('aria-pressed', String(o === b));
+      renderActivity(true);
+    });
+  for (const b of $$('[data-basemap]'))
+    b.addEventListener('click', () => mapCtl && mapCtl.setBasemap(b.dataset.basemap));
   $('#btn-reset-view').addEventListener('click', () => mapCtl && mapCtl.resetView());
 
-  el.rankFilter.addEventListener('input', () => { S.query = el.rankFilter.value; renderRank(true); });
+  el.rankFilter.addEventListener('input', () => {
+    S.query = el.rankFilter.value;
+    renderRank(true);
+  });
 
   for (const th of $$('.rank-table thead button')) {
     th.addEventListener('click', () => {
@@ -2172,7 +3004,14 @@ function bind() {
       if (S.sort.key === key) S.sort.dir = S.sort.dir === 'asc' ? 'desc' : 'asc';
       else S.sort = { key, dir: key === 'rank' || key === 'name' ? 'asc' : 'desc' };
       for (const o of $$('.rank-table thead button')) {
-        o.setAttribute('aria-sort', o.dataset.sort === S.sort.key ? (S.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none');
+        o.setAttribute(
+          'aria-sort',
+          o.dataset.sort === S.sort.key
+            ? S.sort.dir === 'asc'
+              ? 'ascending'
+              : 'descending'
+            : 'none'
+        );
       }
       renderRank(true);
     });
@@ -2182,10 +3021,16 @@ function bind() {
     b.addEventListener('click', async () => {
       const kind = b.dataset.fail;
       b.disabled = true;
-      const res = await fetchJson(`/api/demo/fail/${kind}`, { method: 'POST' }, 12000).catch(() => ({ ok: false, status: 0 }));
+      const res = await fetchJson(`/api/demo/fail/${kind}`, { method: 'POST' }, 12000).catch(
+        () => ({ ok: false, status: 0 })
+      );
       b.disabled = false;
       if (!res.ok) toast(`Simulated failure "${kind}" could not be injected.`, 'critical');
-      else logLocal(`Simulated failure injected: ${kind}. Everything it produces is tagged SIMULATED.`, { simulated: true, kind });
+      else
+        logLocal(
+          `Simulated failure injected: ${kind}. Everything it produces is tagged SIMULATED.`,
+          { simulated: true, kind }
+        );
       $('#demo-menu').open = false;
       pollState();
     });
@@ -2199,10 +3044,15 @@ function bind() {
       const i = tabs.indexOf(t);
       let next = null;
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(i + 1) % tabs.length];
-      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(i - 1 + tabs.length) % tabs.length];
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+        next = tabs[(i - 1 + tabs.length) % tabs.length];
       else if (e.key === 'Home') next = tabs[0];
       else if (e.key === 'End') next = tabs[tabs.length - 1];
-      if (next) { e.preventDefault(); setView(next.dataset.view); next.focus(); }
+      if (next) {
+        e.preventDefault();
+        setView(next.dataset.view);
+        next.focus();
+      }
     });
   }
 
@@ -2231,7 +3081,10 @@ function bind() {
 
   window.addEventListener('resize', syncLayout);
   $('#legend').addEventListener('toggle', function () {
-    if (legendProgrammatic) { legendProgrammatic = false; return; }
+    if (legendProgrammatic) {
+      legendProgrammatic = false;
+      return;
+    }
     this.dataset.userSet = '1';
   });
 
@@ -2239,9 +3092,17 @@ function bind() {
     if (modal) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    if (e.key >= '1' && e.key <= '4') { setView(VIEWS[Number(e.key) - 1]); return; }
-    if (e.key === 'r') { if (mapCtl) mapCtl.resetView(); }
-    else if (e.key === '/') { e.preventDefault(); setView('overview'); el.rankFilter.focus(); }
+    if (e.key >= '1' && e.key <= '4') {
+      setView(VIEWS[Number(e.key) - 1]);
+      return;
+    }
+    if (e.key === 'r') {
+      if (mapCtl) mapCtl.resetView();
+    } else if (e.key === '/') {
+      e.preventDefault();
+      setView('overview');
+      el.rankFilter.focus();
+    }
   });
 }
 
@@ -2258,9 +3119,20 @@ function renderAll() {
   if (S.selectedId) renderSettlementHead(rowById(S.selectedId), S.selectedId);
   if (mapCtl) {
     const pend = pendingSettlementIds();
-    const sig = JSON.stringify(rows().map((r) =>
-      [r.settlementId, r.rank, r.silenceHours, r.population, r.anomalyType, r.coverageBasis]));
-    if (sig !== mapSig) { mapSig = sig; mapCtl.setData(rows(), S.adjacency || {}); }
+    const sig = JSON.stringify(
+      rows().map((r) => [
+        r.settlementId,
+        r.rank,
+        r.silenceHours,
+        r.population,
+        r.anomalyType,
+        r.coverageBasis
+      ])
+    );
+    if (sig !== mapSig) {
+      mapSig = sig;
+      mapCtl.setData(rows(), S.adjacency || {});
+    }
     mapCtl.setPending(pend);
     if (S.selectedId) mapCtl.select(S.selectedId, { fly: false });
     syncMapStaleness();
@@ -2279,7 +3151,10 @@ function syncMapStaleness() {
   const t = last ? Date.parse(last) : NaN;
   // No completed pass yet, or the API itself is unreachable: that is the most
   // stale the console can be, and it says so rather than looking fresh.
-  if (!Number.isFinite(t)) { mapCtl.setStaleness(S.state ? 6 : 0); return; }
+  if (!Number.isFinite(t)) {
+    mapCtl.setStaleness(S.state ? 6 : 0);
+    return;
+  }
   mapCtl.setStaleness(Math.max(0, (Date.now() - t) / 3600000));
 }
 
@@ -2287,28 +3162,51 @@ function boot() {
   Object.assign(el, {
     apiBanner: $('#api-banner'),
     // finding
-    finding: $('#finding'), findingB: $('#finding-b'), findingNote: $('#finding-note'),
-    findingLive: $('#finding-live'), humanBandGlyph: $('#human-band .hb-glyph'),
-    humanBand: $('#human-band'), humanBandText: $('#human-band-text'), humanBandGo: $('#human-band-go'),
-    navBadge: $('#nav-badge'), tabSettlement: $('#tab-settlement'),
+    finding: $('#finding'),
+    findingB: $('#finding-b'),
+    findingNote: $('#finding-note'),
+    findingLive: $('#finding-live'),
+    humanBandGlyph: $('#human-band .hb-glyph'),
+    humanBand: $('#human-band'),
+    humanBandText: $('#human-band-text'),
+    humanBandGo: $('#human-band-go'),
+    navBadge: $('#nav-badge'),
+    tabSettlement: $('#tab-settlement'),
     // board
-    btnRun: $('#btn-run'), rankRows: $('#rank-rows'), rankTable: $('#rank-table'),
-    rankEmpty: $('#rank-empty'), rankCount: $('#rank-count'), rankFilter: $('#rank-filter'),
+    btnRun: $('#btn-run'),
+    rankRows: $('#rank-rows'),
+    rankTable: $('#rank-table'),
+    rankEmpty: $('#rank-empty'),
+    rankCount: $('#rank-count'),
+    rankFilter: $('#rank-filter'),
     boardFoot: $('#board-foot'),
     // settlement
-    setName: $('#set-name'), setDistrict: $('#set-district'), setFacts: $('#set-facts'),
+    setName: $('#set-name'),
+    setDistrict: $('#set-district'),
+    setFacts: $('#set-facts'),
     evidenceBody: $('#evidence-body'),
     // decisions
-    checkpointBody: $('#checkpoint-body'), cpLeadLine: $('#cp-lead-line'),
+    checkpointBody: $('#checkpoint-body'),
+    cpLeadLine: $('#cp-lead-line'),
     viewDecisions: $('#view-decisions'),
     // activity
-    activityList: $('#activity-list'), actCount: $('#act-count'), stageList: $('#stage-list'),
-    railSub: $('#rail-sub'), railAnnounce: $('#rail-announce'),
-    sourceChips: $('#source-chips'), sourceAgg: $('#source-agg'), passKv: $('#pass-kv'),
+    activityList: $('#activity-list'),
+    actCount: $('#act-count'),
+    stageList: $('#stage-list'),
+    railSub: $('#rail-sub'),
+    railAnnounce: $('#rail-announce'),
+    sourceChips: $('#source-chips'),
+    sourceAgg: $('#source-agg'),
+    passKv: $('#pass-kv'),
     // status bar
-    statusbar: $('#statusbar'), sbTrack: $('#sb-track'), sbText: $('#sb-text'),
-    sbSources: $('#sb-sources'), cbarText: $('#cbar-text'), cbarAction: $('#cbar-action'),
-    toasts: $('#toasts'), modalRoot: $('#modal-root')
+    statusbar: $('#statusbar'),
+    sbTrack: $('#sb-track'),
+    sbText: $('#sb-text'),
+    sbSources: $('#sb-sources'),
+    cbarText: $('#cbar-text'),
+    cbarAction: $('#cbar-action'),
+    toasts: $('#toasts'),
+    modalRoot: $('#modal-root')
   });
 
   applyTheme(safeLocal('sz-theme') || 'auto');
@@ -2321,9 +3219,17 @@ function boot() {
   // Shell + skeletons paint before anything touches the network. The first
   // ~40 seconds after a cold boot genuinely has zero settlements, so these
   // loading states are the real screen, not a hypothetical one.
-  renderFinding(); renderHumanBand(); renderStages(); renderPassKv();
-  renderRank(); renderCheckpoint(); renderCheckpointBar();
-  renderActivity(); renderSources(); renderSettlementHead(null, null); renderEvidence();
+  renderFinding();
+  renderHumanBand();
+  renderStages();
+  renderPassKv();
+  renderRank();
+  renderCheckpoint();
+  renderCheckpointBar();
+  renderActivity();
+  renderSources();
+  renderSettlementHead(null, null);
+  renderEvidence();
 
   try {
     mapCtl = createMapController({
@@ -2345,20 +3251,30 @@ function boot() {
     });
   } catch (err) {
     logLocal(`The map could not be initialised: ${err.message}. Everything else still works.`);
-    $('#map-status').textContent = 'Map unavailable — the rank list, evidence and decisions all still work.';
+    $('#map-status').textContent =
+      'Map unavailable — the rank list, evidence and decisions all still work.';
   }
 
   // Corridor adjacency: static reference data, mirrored into web/ so the browser
   // can draw the exact graph Gi* runs on. Its absence costs the lines, nothing else.
   fetch('./data/corridor.json')
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((adj) => { S.adjacency = adj; if (mapCtl) mapCtl.setAdjacency(adj); })
-    .catch((err) => logLocal(`Corridor adjacency could not be loaded (${err.message}). The map shows settlements without the corridor lines.`));
+    .then((adj) => {
+      S.adjacency = adj;
+      if (mapCtl) mapCtl.setAdjacency(adj);
+    })
+    .catch((err) =>
+      logLocal(
+        `Corridor adjacency could not be loaded (${err.message}). The map shows settlements without the corridor lines.`
+      )
+    );
 
   pollState().finally(loopPoll);
   // Relative timestamps have to keep ticking even when the payload does not.
   setInterval(() => {
-    renderFinding(); renderCheckpoint(); renderSources();
+    renderFinding();
+    renderCheckpoint();
+    renderSources();
     syncMapStaleness();
     if (!S.running) renderStages();
   }, 15000);

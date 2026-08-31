@@ -36,25 +36,38 @@
  */
 export const INVISIBLE_CHARS = new Set([
   '​', // zero width space
-  '‎', '‏', // LTR/RTL marks
-  '⁠', '⁡', '⁢', '⁣', '⁤', // word joiner / invisible ops
+  '‎',
+  '‏', // LTR/RTL marks
+  '⁠',
+  '⁡',
+  '⁢',
+  '⁣',
+  '⁤', // word joiner / invisible ops
   '᠎', // mongolian vowel separator
   '﻿' // BOM / zero width no-break space
 ]);
 
 /** Bidirectional overrides - used to render text in an order humans cannot read. */
-export const BIDI_CONTROL_CHARS = new Set([
-  '‪', '‫', '‬', '‭', '‮',
-  '⁦', '⁧', '⁨', '⁩'
-]);
+export const BIDI_CONTROL_CHARS = new Set(['‪', '‫', '‬', '‭', '‮', '⁦', '⁧', '⁨', '⁩']);
 
 /** Unicode TAG block: an entire ASCII alphabet that renders as nothing at all. */
 export const TAG_CHAR_RE = /[\u{E0000}-\u{E007F}]/u;
 
 /** Leet / symbol substitutions. Applied ONLY in the deobfuscated pass. */
 const LEET = {
-  '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '8': 'b', '9': 'g',
-  '@': 'a', '$': 's', '!': 'i', '|': 'l', '+': 't'
+  0: 'o',
+  1: 'i',
+  3: 'e',
+  4: 'a',
+  5: 's',
+  7: 't',
+  8: 'b',
+  9: 'g',
+  '@': 'a',
+  $: 's',
+  '!': 'i',
+  '|': 'l',
+  '+': 't'
 };
 
 /**
@@ -63,11 +76,38 @@ const LEET = {
  * actually appear in copy-paste evasion.
  */
 const CONFUSABLES = {
-  'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o', 'р': 'p',
-  'с': 'c', 'т': 't', 'у': 'y', 'х': 'x', 'ѕ': 's', 'і': 'i', 'ј': 'j', 'ԁ': 'd',
-  'ѵ': 'v', 'ԛ': 'q', 'ԝ': 'w',
-  'α': 'a', 'ε': 'e', 'ι': 'i', 'ο': 'o', 'ρ': 'p', 'τ': 't', 'υ': 'u', 'ν': 'v',
-  'κ': 'k', 'μ': 'm', 'χ': 'x', 'γ': 'y', 'ϲ': 'c'
+  а: 'a',
+  в: 'b',
+  е: 'e',
+  к: 'k',
+  м: 'm',
+  н: 'h',
+  о: 'o',
+  р: 'p',
+  с: 'c',
+  т: 't',
+  у: 'y',
+  х: 'x',
+  ѕ: 's',
+  і: 'i',
+  ј: 'j',
+  ԁ: 'd',
+  ѵ: 'v',
+  ԛ: 'q',
+  ԝ: 'w',
+  α: 'a',
+  ε: 'e',
+  ι: 'i',
+  ο: 'o',
+  ρ: 'p',
+  τ: 't',
+  υ: 'u',
+  ν: 'v',
+  κ: 'k',
+  μ: 'm',
+  χ: 'x',
+  γ: 'y',
+  ϲ: 'c'
 };
 
 /**
@@ -101,9 +141,29 @@ const CLAUSE_BREAK_PUNCT_RE = /[,;:—–(){}[\]"“”]|\.\.\./;
 
 /** Words that open a new clause, so a negation before them does not scope past. */
 const CLAUSE_BREAK_WORDS = new Set([
-  'that', 'which', 'who', 'whom', 'whose', 'because', 'since', 'although',
-  'though', 'but', 'and', 'or', 'so', 'then', 'however', 'therefore', 'thus',
-  'whereas', 'meanwhile', 'yet', 'still', 'instead', 'nevertheless'
+  'that',
+  'which',
+  'who',
+  'whom',
+  'whose',
+  'because',
+  'since',
+  'although',
+  'though',
+  'but',
+  'and',
+  'or',
+  'so',
+  'then',
+  'however',
+  'therefore',
+  'thus',
+  'whereas',
+  'meanwhile',
+  'yet',
+  'still',
+  'instead',
+  'nevertheless'
 ]);
 
 /**
@@ -192,11 +252,15 @@ function mergeLetterSpacing(tokens, text) {
       tokens[j].t.length === 1 &&
       /[a-z]/.test(tokens[j].t) &&
       (j === i || runContinues(tokens[j - 1], tokens[j]))
-    ) j++;
+    )
+      j++;
     const run = j - i;
     if (run >= 3) {
       out.push({
-        t: tokens.slice(i, j).map((x) => x.t).join(''),
+        t: tokens
+          .slice(i, j)
+          .map((x) => x.t)
+          .join(''),
         start: tokens[i].start,
         end: tokens[j - 1].end,
         merged: true
@@ -348,7 +412,8 @@ export function makeScan(src, opts = {}) {
     {
       name: 'glued',
       text: gluedText,
-      spanFor: (a, b) => spanForTokens(indexIn(gluedStarts, a), indexIn(gluedStarts, Math.max(a, b - 1)))
+      spanFor: (a, b) =>
+        spanForTokens(indexIn(gluedStarts, a), indexIn(gluedStarts, Math.max(a, b - 1)))
     }
   ];
 
@@ -632,6 +697,8 @@ export function firstScriptSpan(src, script) {
 
 /** Clip a quoted span so an incident message stays readable. */
 export function clip(str, max = 120) {
-  const s = String(str ?? '').replace(/\s+/g, ' ').trim();
+  const s = String(str ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }

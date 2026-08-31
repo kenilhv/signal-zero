@@ -27,8 +27,15 @@
 // ---------------------------------------------------------------------------
 
 import {
-  makeScans, anyWordAt, phraseAt, findWord, findPhrase, negationBefore,
-  uncoveredScripts, firstScriptSpan, clip
+  makeScans,
+  anyWordAt,
+  phraseAt,
+  findWord,
+  findPhrase,
+  negationBefore,
+  uncoveredScripts,
+  firstScriptSpan,
+  clip
 } from './text.js';
 import { SEVERITY, violation, makeVerdict, internalErrorVerdict } from './verdict.js';
 
@@ -36,12 +43,39 @@ import { SEVERITY, violation, makeVerdict, internalErrorVerdict } from './verdic
 
 /** Words that assert knowledge. */
 const KNOWLEDGE = new Set([
-  'confirmed', 'confirm', 'confirms', 'confirming', 'confirmation',
-  'verified', 'verify', 'verifies', 'verification', 'validated', 'validate',
-  'established', 'proven', 'proves', 'proved', 'certain', 'certainly',
-  'definitely', 'definitive', 'conclusive', 'conclusively', 'known', 'know',
-  'knows', 'determined', 'ascertained', 'clearly', 'undoubtedly', 'guaranteed',
-  'assured', 'sure', 'evidently', 'demonstrably'
+  'confirmed',
+  'confirm',
+  'confirms',
+  'confirming',
+  'confirmation',
+  'verified',
+  'verify',
+  'verifies',
+  'verification',
+  'validated',
+  'validate',
+  'established',
+  'proven',
+  'proves',
+  'proved',
+  'certain',
+  'certainly',
+  'definitely',
+  'definitive',
+  'conclusive',
+  'conclusively',
+  'known',
+  'know',
+  'knows',
+  'determined',
+  'ascertained',
+  'clearly',
+  'undoubtedly',
+  'guaranteed',
+  'assured',
+  'sure',
+  'evidently',
+  'demonstrably'
 ]);
 
 /**
@@ -55,40 +89,77 @@ const KNOWLEDGE = new Set([
  * hunts is claiming to have OBSERVED a silence.
  */
 const ABSENCE_STATES = new Set([
-  'silent', 'silence', 'quiet', 'empty', 'deserted', 'abandoned',
-  'uninhabited', 'incommunicado'
+  'silent',
+  'silence',
+  'quiet',
+  'empty',
+  'deserted',
+  'abandoned',
+  'uninhabited',
+  'incommunicado'
 ]);
 
 /** Catastrophe-from-absence assertions. */
 const CATASTROPHE_PHRASES = [
-  ['no', 'survivors'], ['nobody', 'survived'], ['no', 'one', 'survived'],
-  ['none', 'survived'], ['everyone', 'is', 'dead'], ['all', 'are', 'dead'],
-  ['all', 'dead'], ['nobody', 'is', 'alive'], ['no', 'one', 'is', 'alive'],
-  ['wiped', 'out'], ['total', 'loss', 'of', 'life'],
-  ['nobody', 'left'], ['no', 'one', 'left'], ['everyone', 'is', 'gone']
+  ['no', 'survivors'],
+  ['nobody', 'survived'],
+  ['no', 'one', 'survived'],
+  ['none', 'survived'],
+  ['everyone', 'is', 'dead'],
+  ['all', 'are', 'dead'],
+  ['all', 'dead'],
+  ['nobody', 'is', 'alive'],
+  ['no', 'one', 'is', 'alive'],
+  ['wiped', 'out'],
+  ['total', 'loss', 'of', 'life'],
+  ['nobody', 'left'],
+  ['no', 'one', 'left'],
+  ['everyone', 'is', 'gone']
 ];
 
 /** Safety-from-absence assertions - the quieter, deadlier half. */
 const SAFETY_PHRASES = [
-  ['no', 'casualties'], ['no', 'damage'], ['all', 'clear'], ['is', 'safe'],
-  ['are', 'safe'], ['is', 'fine'], ['are', 'fine'], ['is', 'unaffected'],
-  ['are', 'unaffected'], ['unaffected'], ['no', 'harm'], ['nothing', 'happened'],
-  ['is', 'intact'], ['are', 'intact'], ['is', 'ok'], ['are', 'ok'],
-  ['no', 'emergency'], ['no', 'need', 'for', 'concern']
+  ['no', 'casualties'],
+  ['no', 'damage'],
+  ['all', 'clear'],
+  ['is', 'safe'],
+  ['are', 'safe'],
+  ['is', 'fine'],
+  ['are', 'fine'],
+  ['is', 'unaffected'],
+  ['are', 'unaffected'],
+  ['unaffected'],
+  ['no', 'harm'],
+  ['nothing', 'happened'],
+  ['is', 'intact'],
+  ['are', 'intact'],
+  ['is', 'ok'],
+  ['are', 'ok'],
+  ['no', 'emergency'],
+  ['no', 'need', 'for', 'concern']
 ];
 
 /** "no reports" reasoned INTO a conclusion. */
 const INFERENCE_PHRASES = [
   ['no', 'news', 'is', 'good', 'news'],
-  ['silence', 'means'], ['silence', 'implies'], ['silence', 'confirms'],
+  ['silence', 'means'],
+  ['silence', 'implies'],
+  ['silence', 'confirms'],
   ['silence', 'indicates'],
-  ['no', 'reports', 'means'], ['no', 'reports', 'implies'],
-  ['no', 'reports', 'confirms'], ['no', 'reports', 'indicates'],
-  ['no', 'report', 'means'], ['lack', 'of', 'reports', 'means'],
-  ['lack', 'of', 'reports', 'confirms'], ['absence', 'of', 'reports', 'means'],
-  ['absence', 'of', 'reports', 'confirms'], ['absence', 'of', 'data', 'confirms'],
-  ['means', 'nothing', 'happened'], ['means', 'it', 'is', 'safe'],
-  ['proves', 'no', 'one'], ['therefore', 'no', 'survivors'],
+  ['no', 'reports', 'means'],
+  ['no', 'reports', 'implies'],
+  ['no', 'reports', 'confirms'],
+  ['no', 'reports', 'indicates'],
+  ['no', 'report', 'means'],
+  ['lack', 'of', 'reports', 'means'],
+  ['lack', 'of', 'reports', 'confirms'],
+  ['absence', 'of', 'reports', 'means'],
+  ['absence', 'of', 'reports', 'confirms'],
+  ['absence', 'of', 'data', 'confirms'],
+  ['means', 'nothing', 'happened'],
+  ['means', 'it', 'is', 'safe'],
+  ['proves', 'no', 'one'],
+  ['therefore', 'no', 'survivors'],
   ['so', 'it', 'must', 'be', 'empty']
 ];
 
@@ -99,18 +170,45 @@ const INFERENCE_PHRASES = [
  */
 const ABSENCE_SUBJECTS = new Set(['silence', 'absence', 'nothing', 'quiet']);
 const ABSENCE_SUBJECT_PHRASES = [
-  ['no', 'report'], ['no', 'reports'], ['no', 'data'], ['no', 'news'],
-  ['no', 'contact'], ['no', 'word'], ['no', 'information'], ['lack', 'of', 'reports']
+  ['no', 'report'],
+  ['no', 'reports'],
+  ['no', 'data'],
+  ['no', 'news'],
+  ['no', 'contact'],
+  ['no', 'word'],
+  ['no', 'information'],
+  ['lack', 'of', 'reports']
 ];
 const EVIDENCE_WORDS = new Set([
-  'proof', 'proves', 'proven', 'evidence', 'confirms', 'confirmed', 'means',
-  'meaning', 'implies', 'implied', 'indicates', 'indicating', 'demonstrates',
-  'suggests', 'establishes'
+  'proof',
+  'proves',
+  'proven',
+  'evidence',
+  'confirms',
+  'confirmed',
+  'means',
+  'meaning',
+  'implies',
+  'implied',
+  'indicates',
+  'indicating',
+  'demonstrates',
+  'suggests',
+  'establishes'
 ]);
 
 /** First-person knowledge claims: "we know X is quiet". */
 const KNOWERS = new Set(['we', 'i', 'system', 'signal', 'it', 'this', 'dashboard']);
-const KNOWING_VERBS = new Set(['know', 'knows', 'confirm', 'confirms', 'confirmed', 'verified', 'established', 'determined']);
+const KNOWING_VERBS = new Set([
+  'know',
+  'knows',
+  'confirm',
+  'confirms',
+  'confirmed',
+  'verified',
+  'established',
+  'determined'
+]);
 
 /**
  * The framings that are TRUE. If a cold-start surface talks about silence at
@@ -140,13 +238,33 @@ const HONEST_FRAMINGS = [
 
 /** Words that mean the text is making a coverage claim at all. */
 const COVERAGE_TOPIC = new Set([
-  'silent', 'silence', 'quiet', 'covered', 'coverage', 'unreported',
-  'unreachable', 'contactless'
+  'silent',
+  'silence',
+  'quiet',
+  'covered',
+  'coverage',
+  'unreported',
+  'unreachable',
+  'contactless'
 ]);
 
 const NEGATION = new Set([
-  'not', 'never', 'no', 'nor', 'cannot', 'cant', 'wont', 'dont', 'doesnt',
-  'didnt', 'without', 'neither', 'un', 'isnt', 'arent', 'rather'
+  'not',
+  'never',
+  'no',
+  'nor',
+  'cannot',
+  'cant',
+  'wont',
+  'dont',
+  'doesnt',
+  'didnt',
+  'without',
+  'neither',
+  'un',
+  'isnt',
+  'arent',
+  'rather'
 ]);
 
 const SUGGESTIONS = {
@@ -396,7 +514,10 @@ function ruleColdStartFraming(scan, out) {
   const honest = findPhrase(scan, HONEST_FRAMINGS, 0, scan.tokens.length - 1);
   if (honest) return;
 
-  const span = scan.spanForTokens(Math.max(0, topicIdx - 3), Math.min(topicIdx + 3, scan.tokens.length - 1));
+  const span = scan.spanForTokens(
+    Math.max(0, topicIdx - 3),
+    Math.min(topicIdx + 3, scan.tokens.length - 1)
+  );
   out.push(
     violation({
       rule: 'honest.missing-cold-start-framing',

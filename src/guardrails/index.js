@@ -70,8 +70,17 @@ export const ALL_RULES = [
  * NOT decide what gets scanned - see below.
  */
 const MODEL_AUTHORED_FIELDS = [
-  'category', 'settlementId', 'why', 'whyFull', 'rationale', 'text', 'message',
-  'matchedOn', 'note', 'summary', 'rawModelText'
+  'category',
+  'settlementId',
+  'why',
+  'whyFull',
+  'rationale',
+  'text',
+  'message',
+  'matchedOn',
+  'note',
+  'summary',
+  'rawModelText'
 ];
 
 /**

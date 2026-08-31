@@ -17,8 +17,17 @@
 //   style expressions: three more network/GPU dependencies that cannot fail.
 
 import {
-  h, silStop, popRadius, anomalyOf, fmtHours, fmtZ, fmtInt, reducedMotion, throttleRaf,
-  silenceKind, fmtNum
+  h,
+  silStop,
+  popRadius,
+  anomalyOf,
+  fmtHours,
+  fmtZ,
+  fmtInt,
+  reducedMotion,
+  throttleRaf,
+  silenceKind,
+  fmtNum
 } from './lib.js';
 
 const CAMERA = { center: [85.05, 27.99], zoom: 8.7, pitch: 54, bearing: 18 };
@@ -26,15 +35,20 @@ const CAMERA = { center: [85.05, 27.99], zoom: 8.7, pitch: 54, bearing: 18 };
 // higher, flatter and turned a few degrees off the resting bearing so the
 // ridgelines rotate into their rim light rather than snapping into place.
 const OPENING = { center: [85.02, 27.95], zoom: 7.9, pitch: 22, bearing: 4 };
-const MAX_BOUNDS = [[83.75, 26.95], [86.55, 29.05]];
+const MAX_BOUNDS = [
+  [83.75, 26.95],
+  [86.55, 29.05]
+];
 // Starting extent for the fallback plot. Replaced by the real data extent as soon
 // as settlements arrive, so the corridor fills the pane instead of floating in the
 // middle of the camera's guard-rail box.
-const FB_DEFAULT = { west: 84.20, east: 86.05, south: 27.35, north: 28.62 };
+const FB_DEFAULT = { west: 84.2, east: 86.05, south: 27.35, north: 28.62 };
 
 const DEM_TILES = ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'];
 // NOTE {z}/{y}/{x} — y BEFORE x. Esri, not OSM, tile order.
-const SAT_TILES = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
+const SAT_TILES = [
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+];
 const OSM_TILES = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
 
 const LIB_TIMEOUT_MS = 6000;
@@ -62,17 +76,19 @@ const LIB_TIMEOUT_MS = 6000;
 // Under prefers-reduced-motion the pulse is simply not created; all three states
 // above are already static drawings, so the distinction survives untouched.
 
-const RING_VB = 100;          // viewBox is 0 0 100 100 for every marker
+const RING_VB = 100; // viewBox is 0 0 100 100 for every marker
 const RING_R = 42;
 const RING_C = 2 * Math.PI * RING_R;
-const ARC_SWEEP = 300;        // degrees. A frozen arc can never close a circle.
+const ARC_SWEEP = 300; // degrees. A frozen arc can never close a circle.
 
 // Real hours are compressed into a legible loop — a 37-hour CSS animation is not
 // a thing anyone can perceive. The compression is monotone (a longer real
 // interval is always a slower ring) and the real figure is stated verbatim in
 // the marker tooltip, so nothing is hidden by it.
-const CYC_MIN_S = 4.2, CYC_MAX_S = 18;
-const GAP_MIN_H = 6, GAP_MAX_H = 72;
+const CYC_MIN_S = 4.2,
+  CYC_MAX_S = 18;
+const GAP_MIN_H = 6,
+  GAP_MAX_H = 72;
 function cycleSeconds(expectedGapHours) {
   const g = Number(expectedGapHours);
   if (!Number.isFinite(g) || g <= 0) return null;
@@ -83,7 +99,8 @@ function cycleSeconds(expectedGapHours) {
 const SVGNS = 'http://www.w3.org/2000/svg';
 const svgEl = (name, attrs) => {
   const n = document.createElementNS(SVGNS, name);
-  for (const [k, v] of Object.entries(attrs || {})) if (v !== null && v !== undefined) n.setAttribute(k, String(v));
+  for (const [k, v] of Object.entries(attrs || {}))
+    if (v !== null && v !== undefined) n.setAttribute(k, String(v));
   return n;
 };
 
@@ -92,21 +109,39 @@ const svgEl = (name, attrs) => {
  * elapsed fraction is silenceHours/expectedGapHours, both server fields.
  */
 function buildRing(row, kind) {
-  const svg = svgEl('svg', { class: 'mk-ring', viewBox: `0 0 ${RING_VB} ${RING_VB}`, 'aria-hidden': 'true' });
+  const svg = svgEl('svg', {
+    class: 'mk-ring',
+    viewBox: `0 0 ${RING_VB} ${RING_VB}`,
+    'aria-hidden': 'true'
+  });
   svg.dataset.kind = kind;
 
   if (kind === 'never') {
     // No cycle was ever observed here, so there is nothing to draw a position on.
-    svg.append(svgEl('circle', {
-      class: 'rg-ghost', cx: 50, cy: 50, r: RING_R, fill: 'none', 'vector-effect': 'non-scaling-stroke'
-    }));
+    svg.append(
+      svgEl('circle', {
+        class: 'rg-ghost',
+        cx: 50,
+        cy: 50,
+        r: RING_R,
+        fill: 'none',
+        'vector-effect': 'non-scaling-stroke'
+      })
+    );
     return svg;
   }
 
   if (kind === 'recent') {
-    svg.append(svgEl('circle', {
-      class: 'rg-full', cx: 50, cy: 50, r: RING_R, fill: 'none', 'vector-effect': 'non-scaling-stroke'
-    }));
+    svg.append(
+      svgEl('circle', {
+        class: 'rg-full',
+        cx: 50,
+        cy: 50,
+        r: RING_R,
+        fill: 'none',
+        'vector-effect': 'non-scaling-stroke'
+      })
+    );
     return svg;
   }
 
@@ -114,28 +149,46 @@ function buildRing(row, kind) {
   const gap = Number(row.expectedGapHours);
   const sil = Number(row.silenceHours);
   const ratio = Number.isFinite(gap) && gap > 0 && Number.isFinite(sil) ? sil / gap : 1;
-  const f = Math.min(1, Math.max(0.08, ratio));       // never a full circle
+  const f = Math.min(1, Math.max(0.08, ratio)); // never a full circle
   const sweptDeg = f * ARC_SWEEP;
   const swept = (sweptDeg / 360) * RING_C;
 
-  svg.append(svgEl('circle', {
-    class: 'rg-track', cx: 50, cy: 50, r: RING_R, fill: 'none', 'vector-effect': 'non-scaling-stroke'
-  }));
-  svg.append(svgEl('circle', {
-    class: 'rg-arc', cx: 50, cy: 50, r: RING_R, fill: 'none', 'vector-effect': 'non-scaling-stroke',
-    transform: `rotate(-90 50 50)`,
-    'stroke-dasharray': `${swept.toFixed(2)} ${(RING_C - swept).toFixed(2)}`
-  }));
+  svg.append(
+    svgEl('circle', {
+      class: 'rg-track',
+      cx: 50,
+      cy: 50,
+      r: RING_R,
+      fill: 'none',
+      'vector-effect': 'non-scaling-stroke'
+    })
+  );
+  svg.append(
+    svgEl('circle', {
+      class: 'rg-arc',
+      cx: 50,
+      cy: 50,
+      r: RING_R,
+      fill: 'none',
+      'vector-effect': 'non-scaling-stroke',
+      transform: `rotate(-90 50 50)`,
+      'stroke-dasharray': `${swept.toFixed(2)} ${(RING_C - swept).toFixed(2)}`
+    })
+  );
 
   // The stopped-clock notch: a radial tick at exactly the angle the arc reached.
   const th = ((-90 + sweptDeg) * Math.PI) / 180;
-  svg.append(svgEl('line', {
-    class: 'rg-notch', 'vector-effect': 'non-scaling-stroke', 'stroke-linecap': 'butt',
-    x1: (50 + Math.cos(th) * (RING_R - 7)).toFixed(2),
-    y1: (50 + Math.sin(th) * (RING_R - 7)).toFixed(2),
-    x2: (50 + Math.cos(th) * (RING_R + 8)).toFixed(2),
-    y2: (50 + Math.sin(th) * (RING_R + 8)).toFixed(2)
-  }));
+  svg.append(
+    svgEl('line', {
+      class: 'rg-notch',
+      'vector-effect': 'non-scaling-stroke',
+      'stroke-linecap': 'butt',
+      x1: (50 + Math.cos(th) * (RING_R - 7)).toFixed(2),
+      y1: (50 + Math.sin(th) * (RING_R - 7)).toFixed(2),
+      x2: (50 + Math.cos(th) * (RING_R + 8)).toFixed(2),
+      y2: (50 + Math.sin(th) * (RING_R + 8)).toFixed(2)
+    })
+  );
   return svg;
 }
 
@@ -144,7 +197,10 @@ function buildStyle() {
     version: 8,
     sources: {
       terrainDEM: {
-        type: 'raster-dem', encoding: 'terrarium', tileSize: 256, maxzoom: 14,
+        type: 'raster-dem',
+        encoding: 'terrarium',
+        tileSize: 256,
+        maxzoom: 14,
         tiles: DEM_TILES,
         attribution: 'Elevation: Mapzen / AWS Terrain Tiles'
       },
@@ -155,26 +211,39 @@ function buildStyle() {
       // browser's HTTP cache serves the second source for free — the only real
       // cost is a second decoded tile cache, which at this extent is small.
       hillshadeDEM: {
-        type: 'raster-dem', encoding: 'terrarium', tileSize: 256, maxzoom: 14,
+        type: 'raster-dem',
+        encoding: 'terrarium',
+        tileSize: 256,
+        maxzoom: 14,
         tiles: DEM_TILES
       },
       satellite: {
-        type: 'raster', tileSize: 256, maxzoom: 17, tiles: SAT_TILES,
+        type: 'raster',
+        tileSize: 256,
+        maxzoom: 17,
+        tiles: SAT_TILES,
         attribution: '© Esri, Maxar, Earthstar Geographics'
       },
       street: {
-        type: 'raster', tileSize: 256, maxzoom: 19, tiles: OSM_TILES,
+        type: 'raster',
+        tileSize: 256,
+        maxzoom: 19,
+        tiles: OSM_TILES,
         attribution: '© OpenStreetMap contributors'
       }
     },
     layers: [
       {
-        id: 'satellite', type: 'raster', source: 'satellite',
+        id: 'satellite',
+        type: 'raster',
+        source: 'satellite',
         // Human features minimised so the data layer dominates (cartography rule).
         paint: { 'raster-saturation': -0.18, 'raster-contrast': 0.06, 'raster-opacity': 1 }
       },
       {
-        id: 'street', type: 'raster', source: 'street',
+        id: 'street',
+        type: 'raster',
+        source: 'street',
         layout: { visibility: 'none' },
         paint: { 'raster-saturation': -0.55, 'raster-brightness-min': 0.15, 'raster-contrast': 0.1 }
       },
@@ -184,7 +253,9 @@ function buildStyle() {
         // in real terrain shading — the same effect a rim-light shader fakes in a
         // WebGL scene, available here as one property. Kept thin (0.3) and warm
         // in the highlight so it draws the ridgelines without greying the valley.
-        id: 'hillshade', type: 'hillshade', source: 'hillshadeDEM',
+        id: 'hillshade',
+        type: 'hillshade',
+        source: 'hillshadeDEM',
         layout: { visibility: 'none' },
         paint: {
           'hillshade-exaggeration': 0.3,
@@ -200,38 +271,37 @@ function buildStyle() {
 }
 
 export function createMapController(opts) {
-  const {
-    regionEl, canvasEl, overlayEl, statusEl, bannerEl, tipEl,
-    onSelect, onHover, log
-  } = opts;
+  const { regionEl, canvasEl, overlayEl, statusEl, bannerEl, tipEl, onSelect, onHover, log } = opts;
 
-  let map = null;              // MapLibre instance, or null
-  let ml = null;               // the module namespace
-  let rung = 0;                // degradation rung, 0 = everything works
+  let map = null; // MapLibre instance, or null
+  let ml = null; // the module namespace
+  let rung = 0; // degradation rung, 0 = everything works
   let basemap = 'terrain';
   let terrainOn = false;
-  let hold3d = false;   // hardware guard, not a failure — the user can override it
-  let rows = [];               // ranked settlements, as delivered by the API
+  let hold3d = false; // hardware guard, not a failure — the user can override it
+  let rows = []; // ranked settlements, as delivered by the API
   let adjacency = {};
   let pending = new Set();
   let selectedId = null;
   let hoveredId = null;
   let destroyed = false;
-  const markers = new Map();   // settlementId -> { btn, dot, label, row }
+  const markers = new Map(); // settlementId -> { btn, dot, label, row }
   let linesSvg = null;
   let lineEls = [];
-  let demErrors = 0, satErrors = 0, tileRequests = 0;
+  let demErrors = 0,
+    satErrors = 0,
+    tileRequests = 0;
   let FB = { ...FB_DEFAULT };
   let slowTimer = null;
-  let demFailed = false;   // true only when the DEM tiles themselves are unreachable
+  let demFailed = false; // true only when the DEM tiles themselves are unreachable
   let voidLayer = null;
-  const voids = new Map();     // settlementId -> { el, r }
+  const voids = new Map(); // settlementId -> { el, r }
   let lastAnomaly = new Map(); // settlementId -> anomalyType, for change detection
-  let seenData = false;        // first payload must not fire propagation pulses
+  let seenData = false; // first payload must not fire propagation pulses
   let staleHours = 0;
-  let framed = false;          // the opening camera has been fitted to the corridor
+  let framed = false; // the opening camera has been fitted to the corridor
   let restCam = { ...CAMERA }; // where "Reset view" goes: the fitted frame, once known
-  let userMoved = false;       // the operator has driven the camera; stop correcting it
+  let userMoved = false; // the operator has driven the camera; stop correcting it
 
   // ── effects budget ──────────────────────────────────────────────────────
   // full = rings pulse, the void spreads, corridor pulses fire.
@@ -255,7 +325,7 @@ export function createMapController(opts) {
     } else {
       regionEl.dataset.fx = 'full';
     }
-  }());
+  })();
 
   // ── overlay scaffold ────────────────────────────────────────────────────
   // Painting order inside the overlay is the whole point of the void treatment:
@@ -286,21 +356,28 @@ export function createMapController(opts) {
   // the terrain.
   // Fit the plot to the settlements actually on screen, with a margin.
   function recomputeFallbackExtent() {
-    const pts = rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)));
-    if (pts.length < 2) { FB = { ...FB_DEFAULT }; return; }
+    const pts = rows.filter(
+      (r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))
+    );
+    if (pts.length < 2) {
+      FB = { ...FB_DEFAULT };
+      return;
+    }
     const lats = pts.map((r) => Number(r.lat));
     const lons = pts.map((r) => Number(r.lon));
-    const padLat = Math.max(0.03, (Math.max(...lats) - Math.min(...lats)) * 0.10);
-    const padLon = Math.max(0.03, (Math.max(...lons) - Math.min(...lons)) * 0.10);
+    const padLat = Math.max(0.03, (Math.max(...lats) - Math.min(...lats)) * 0.1);
+    const padLon = Math.max(0.03, (Math.max(...lons) - Math.min(...lons)) * 0.1);
     FB = {
-      west: Math.min(...lons) - padLon, east: Math.max(...lons) + padLon,
-      south: Math.min(...lats) - padLat, north: Math.max(...lats) + padLat
+      west: Math.min(...lons) - padLon,
+      east: Math.max(...lons) + padLon,
+      south: Math.min(...lats) - padLat,
+      north: Math.max(...lats) + padLat
     };
   }
 
   function fallbackProject(lon, lat) {
     const { w, h: hh } = size();
-    const kx = Math.cos(((FB.south + FB.north) / 2 * Math.PI) / 180);
+    const kx = Math.cos((((FB.south + FB.north) / 2) * Math.PI) / 180);
     const bw = (FB.east - FB.west) * kx;
     const bh = FB.north - FB.south;
     const pad = 34;
@@ -318,28 +395,42 @@ export function createMapController(opts) {
       try {
         const p = map.project([lon, lat]);
         if (Number.isFinite(p.x) && Number.isFinite(p.y)) return p;
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
     }
     return fallbackProject(lon, lat);
   }
 
   function currentZoom() {
-    if (map && rung < 3) { try { return map.getZoom(); } catch { /* ignore */ } }
+    if (map && rung < 3) {
+      try {
+        return map.getZoom();
+      } catch {
+        /* ignore */
+      }
+    }
     return 9.6; // fallback plot shows the same labels as a mid-zoom map
   }
 
   // ── banners / status ────────────────────────────────────────────────────
   function banner(msg) {
     if (!bannerEl) return;
-    if (!msg) { bannerEl.hidden = true; return; }
+    if (!msg) {
+      bannerEl.hidden = true;
+      return;
+    }
     bannerEl.hidden = false;
     bannerEl.textContent = '';
     bannerEl.append(h('span', { 'aria-hidden': 'true' }, '▲'), h('span', {}, msg));
   }
   function status(msg) {
     if (!statusEl) return;
-    if (msg && rung >= 3) return;   // nothing is still "loading" once we have fallen back
-    if (!msg) { statusEl.hidden = true; return; }
+    if (msg && rung >= 3) return; // nothing is still "loading" once we have fallen back
+    if (!msg) {
+      statusEl.hidden = true;
+      return;
+    }
     statusEl.hidden = false;
     statusEl.textContent = msg;
   }
@@ -356,9 +447,13 @@ export function createMapController(opts) {
     log(`Map degraded to rung ${to}: ${message}`);
     banner(message);
     if (to >= 1 && terrainOn && map) {
-      try { map.setTerrain(null); } catch { /* ignore */ }
+      try {
+        map.setTerrain(null);
+      } catch {
+        /* ignore */
+      }
       terrainOn = false;
-      syncHillshade();   // with the 3D relief gone, hillshade carries the valley
+      syncHillshade(); // with the 3D relief gone, hillshade carries the valley
     }
     if (to >= 2 && map) applyBasemap('plain');
     if (to >= 3) {
@@ -370,9 +465,18 @@ export function createMapController(opts) {
         const plain = b.dataset.basemap === 'plain';
         b.disabled = !plain;
         b.setAttribute('aria-pressed', String(plain));
-        if (!plain) b.title = 'Unavailable — the map engine is not running. The coordinate plot below shows the same 32 settlements.';
+        if (!plain)
+          b.title =
+            'Unavailable — the map engine is not running. The coordinate plot below shows the same 32 settlements.';
       }
-      if (map) { try { map.remove(); } catch { /* ignore */ } map = null; }
+      if (map) {
+        try {
+          map.remove();
+        } catch {
+          /* ignore */
+        }
+        map = null;
+      }
       status(null);
       reposition();
     }
@@ -398,19 +502,28 @@ export function createMapController(opts) {
       dot.dataset.anom = anom;
       if (cold) dot.dataset.cold = '1';
 
-      const label = h('span', { class: 'mk-label', 'aria-hidden': 'true' },
-        h('b', {}, row.name || row.settlementId));
+      const label = h(
+        'span',
+        { class: 'mk-label', 'aria-hidden': 'true' },
+        h('b', {}, row.name || row.settlementId)
+      );
       if ((row.rank ?? 99) <= 3) label.append(h('i', {}, fmtHours(row.silenceHours)));
 
-      const btn = h('button', {
-        type: 'button',
-        class: 'mk',
-        'data-id': row.settlementId,
-        'aria-label':
-          `${row.name}, ${row.district}. ${fmtHours(row.silenceHours)} silent. ` +
-          `Rank ${row.rank ?? '—'} of ${rows.length}. ` +
-          (cold ? 'No report has ever reached us here.' : `${row.reportCount ?? 0} reports.`)
-      }, buildRing(row, kind), dot, label);
+      const btn = h(
+        'button',
+        {
+          type: 'button',
+          class: 'mk',
+          'data-id': row.settlementId,
+          'aria-label':
+            `${row.name}, ${row.district}. ${fmtHours(row.silenceHours)} silent. ` +
+            `Rank ${row.rank ?? '—'} of ${rows.length}. ` +
+            (cold ? 'No report has ever reached us here.' : `${row.reportCount ?? 0} reports.`)
+        },
+        buildRing(row, kind),
+        dot,
+        label
+      );
       btn.dataset.kind = kind;
 
       // Only a settlement still being heard from gets a moving ring, and it moves
@@ -444,8 +557,14 @@ export function createMapController(opts) {
       btn.addEventListener('click', () => onSelect(row.settlementId));
       btn.addEventListener('pointerenter', () => setHover(row.settlementId, true));
       btn.addEventListener('pointerleave', () => setHover(row.settlementId, false));
-      btn.addEventListener('focus', () => { showTip(row); onHover(row.settlementId, true); });
-      btn.addEventListener('blur', () => { hideTip(); onHover(row.settlementId, false); });
+      btn.addEventListener('focus', () => {
+        showTip(row);
+        onHover(row.settlementId, true);
+      });
+      btn.addEventListener('blur', () => {
+        hideTip();
+        onHover(row.settlementId, false);
+      });
 
       overlayEl.append(btn);
       markers.set(row.settlementId, { btn, dot, label, row, kind });
@@ -530,24 +649,38 @@ export function createMapController(opts) {
     tipEl.append(
       h('b', {}, row.name || row.settlementId),
       h('div', { class: 'mono' }, `${row.district} · ${fmtHours(row.silenceHours)} silent`),
-      h('div', { class: 'mono' }, `Gi* z ${fmtZ(row.giZScore)} · ${anomalyOf(row.anomalyType).short || 'no anomaly flag'}`),
-      h('div', { class: cold ? 'mono nod' : 'mono' },
-        cold ? '◌ no data reached us — baseline borrowed from cohort'
-             : `● ${row.reportCount ?? 0} reports · pop ${fmtInt(row.population)}`)
+      h(
+        'div',
+        { class: 'mono' },
+        `Gi* z ${fmtZ(row.giZScore)} · ${anomalyOf(row.anomalyType).short || 'no anomaly flag'}`
+      ),
+      h(
+        'div',
+        { class: cold ? 'mono nod' : 'mono' },
+        cold
+          ? '◌ no data reached us — baseline borrowed from cohort'
+          : `● ${row.reportCount ?? 0} reports · pop ${fmtInt(row.population)}`
+      )
     );
     // The ring is a statistic, so it explains itself. The compression from real
     // hours to a legible loop is stated, never implied.
     if (Number.isFinite(gap) && gap > 0) {
       const line = h('div', { class: 'mono tip-ring' });
       if (kind === 'recent') {
-        line.append(reducedMotion()
-          ? `◍ ring = one expected report interval: ${fmtHours(gap)}`
-          : `◍ ring pulses once per expected interval — ${fmtHours(gap)}, compressed for display`);
+        line.append(
+          reducedMotion()
+            ? `◍ ring = one expected report interval: ${fmtHours(gap)}`
+            : `◍ ring pulses once per expected interval — ${fmtHours(gap)}, compressed for display`
+        );
       } else if (kind === 'stopped') {
-        line.append(`◔ ring stopped mid-cycle — expected every ${fmtHours(gap)}, ` +
-          `${fmtNum(sil / gap, 1)}× overdue`);
+        line.append(
+          `◔ ring stopped mid-cycle — expected every ${fmtHours(gap)}, ` +
+            `${fmtNum(sil / gap, 1)}× overdue`
+        );
       } else {
-        line.append(`◌ ring never started — ${fmtHours(gap)} is the cohort's interval, not this settlement's`);
+        line.append(
+          `◌ ring never started — ${fmtHours(gap)} is the cohort's interval, not this settlement's`
+        );
       }
       tipEl.append(line);
     }
@@ -558,13 +691,17 @@ export function createMapController(opts) {
     if (!tipEl || tipEl.hidden) return;
     const p = project(row.lon, row.lat);
     const box = canvasEl.getBoundingClientRect();
-    const tw = tipEl.offsetWidth || 200, th = tipEl.offsetHeight || 70;
-    let x = p.x + 16, y = p.y - th - 10;
+    const tw = tipEl.offsetWidth || 200,
+      th = tipEl.offsetHeight || 70;
+    let x = p.x + 16,
+      y = p.y - th - 10;
     if (x + tw > box.width - 8) x = p.x - tw - 16;
     if (y < 8) y = p.y + 18;
     tipEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
   }
-  function hideTip() { if (tipEl) tipEl.hidden = true; }
+  function hideTip() {
+    if (tipEl) tipEl.hidden = true;
+  }
 
   // ── corridor arcs — the Gi* adjacency graph, drawn ──────────────────────
   //
@@ -576,8 +713,9 @@ export function createMapController(opts) {
   // end did the opposite, and stays faint. That weighting is static: it is
   // legible with every animation in the browser switched off.
   function edgeWeight(a, b) {
-    const ka = silenceKind(a), kb = silenceKind(b);
-    if (ka === 'recent' || kb === 'recent') return 'live';   // an anchor, not a cluster
+    const ka = silenceKind(a),
+      kb = silenceKind(b);
+    if (ka === 'recent' || kb === 'recent') return 'live'; // an anchor, not a cluster
     if (ka === 'stopped' || kb === 'stopped') return 'stopped';
     return 'dark';
   }
@@ -597,7 +735,9 @@ export function createMapController(opts) {
         const b = byId.get(nb);
         if (!b) continue;
         const ln = svgEl('path', {
-          class: 'ov-line', fill: 'none', 'vector-effect': 'non-scaling-stroke',
+          class: 'ov-line',
+          fill: 'none',
+          'vector-effect': 'non-scaling-stroke',
           id: `arc-${key.replace(/[^a-z0-9|-]/gi, '')}`.replace(/\|/g, '--')
         });
         ln.dataset.w = edgeWeight(a, b);
@@ -611,13 +751,16 @@ export function createMapController(opts) {
   // proportional to length so short hops stay nearly straight and the long valley
   // legs read as arcs over the terrain rather than as wires laid on top of it.
   function arcPath(pa, pb) {
-    const dx = pb.x - pa.x, dy = pb.y - pa.y;
+    const dx = pb.x - pa.x,
+      dy = pb.y - pa.y;
     const len = Math.hypot(dx, dy) || 1;
     const bow = Math.min(46, len * 0.16);
-    const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+    const mx = (pa.x + pb.x) / 2,
+      my = (pa.y + pb.y) / 2;
     // Always bow the same way relative to the edge direction, so the graph does
     // not flip its shape as the camera rotates.
-    const nx = -dy / len, ny = dx / len;
+    const nx = -dy / len,
+      ny = dx / len;
     const s = ny > 0 ? -1 : 1;
     return `M ${pa.x.toFixed(1)} ${pa.y.toFixed(1)} Q ${(mx + nx * bow * s).toFixed(1)} ${(my + ny * bow * s).toFixed(1)} ${pb.x.toFixed(1)} ${pb.y.toFixed(1)}`;
   }
@@ -635,7 +778,7 @@ export function createMapController(opts) {
     if (seenData) {
       for (const [id, type] of next) {
         const was = lastAnomaly.get(id);
-        if (was === undefined) continue;                       // new row, not a change
+        if (was === undefined) continue; // new row, not a change
         if (CLUSTER_TYPES.has(type) && !CLUSTER_TYPES.has(was)) formed.push(id);
       }
     }
@@ -651,7 +794,9 @@ export function createMapController(opts) {
     if (!edges.length) return;
 
     const anom = anomalyOf(target.row.anomalyType).short || 'anomaly';
-    log(`Corridor: ${target.row.name} entered ${anom.toLowerCase()} — the Gi* graph is showing the ${edges.length} adjacency edge${edges.length === 1 ? '' : 's'} its z-score is summed over.`);
+    log(
+      `Corridor: ${target.row.name} entered ${anom.toLowerCase()} — the Gi* graph is showing the ${edges.length} adjacency edge${edges.length === 1 ? '' : 's'} its z-score is summed over.`
+    );
 
     if (reducedMotion() || fx !== 'full') {
       // Same fact, no travel: the edges that carried the statistic are held lit
@@ -672,8 +817,12 @@ export function createMapController(opts) {
       // ten minutes into a session starts an animation that finished ten minutes
       // ago and never moves.
       const motion = svgEl('animateMotion', {
-        dur: '1.15s', begin: 'indefinite', fill: 'remove',
-        keyPoints: reverse ? '1;0' : '0;1', keyTimes: '0;1', calcMode: 'linear'
+        dur: '1.15s',
+        begin: 'indefinite',
+        fill: 'remove',
+        keyPoints: reverse ? '1;0' : '0;1',
+        keyTimes: '0;1',
+        calcMode: 'linear'
       });
       const mp = svgEl('mpath', { href: `#${e.ln.id}` });
       mp.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', `#${e.ln.id}`);
@@ -683,12 +832,23 @@ export function createMapController(opts) {
       e.ln.classList.add('is-pulsed');
       let started = false;
       try {
-        if (typeof motion.beginElement === 'function') { motion.beginElement(); started = true; }
-      } catch { started = false; }
+        if (typeof motion.beginElement === 'function') {
+          motion.beginElement();
+          started = true;
+        }
+      } catch {
+        started = false;
+      }
       // No SMIL in this engine. The edge still lights, which is the same fact
       // without the travel — the static form the reduced-motion path already uses.
       if (!started) dot.remove();
-      setTimeout(() => { dot.remove(); e.ln.classList.remove('is-pulsed'); }, started ? 1500 : 6000);
+      setTimeout(
+        () => {
+          dot.remove();
+          e.ln.classList.remove('is-pulsed');
+        },
+        started ? 1500 : 6000
+      );
     }
   }
 
@@ -731,8 +891,9 @@ export function createMapController(opts) {
   function layoutLabels(pos, w, hh) {
     const z = currentZoom();
     const placed = [];
-    const ordered = Array.from(markers.values())
-      .sort((a, b) => (a.row.rank ?? 99) - (b.row.rank ?? 99));
+    const ordered = Array.from(markers.values()).sort(
+      (a, b) => (a.row.rank ?? 99) - (b.row.rank ?? 99)
+    );
     for (const m of ordered) {
       const rank = m.row.rank ?? 99;
       const tier = rank <= 3 ? 1 : rank <= 10 ? 2 : 3;
@@ -746,8 +907,13 @@ export function createMapController(opts) {
       const lw = m.label.offsetWidth || 60;
       const lh = m.label.offsetHeight || 14;
       const box = { x1: p.x - lw / 2, y1: p.y + 8, x2: p.x + lw / 2, y2: p.y + 8 + lh };
-      const hits = placed.some((q) => !(box.x2 < q.x1 || box.x1 > q.x2 || box.y2 < q.y1 || box.y1 > q.y2));
-      if (hits) { m.label.style.visibility = 'hidden'; continue; }
+      const hits = placed.some(
+        (q) => !(box.x2 < q.x1 || box.x1 > q.x2 || box.y2 < q.y1 || box.y1 > q.y2)
+      );
+      if (hits) {
+        m.label.style.visibility = 'hidden';
+        continue;
+      }
       placed.push(box);
       m.label.style.visibility = 'visible';
     }
@@ -771,20 +937,32 @@ export function createMapController(opts) {
     regionEl.dataset.basemap = kind;
     if (!map) return;
     try {
-      const vis = (id, on) => map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+      const vis = (id, on) =>
+        map.getLayer(id) && map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
       vis('satellite', kind === 'terrain');
       vis('street', kind === 'street');
-      if (kind === 'plain' && terrainOn) { map.setTerrain(null); terrainOn = false; }
+      if (kind === 'plain' && terrainOn) {
+        map.setTerrain(null);
+        terrainOn = false;
+      }
       // An explicit Terrain click overrides both the hardware guard and a
       // performance-based drop: the operator asked for it. It cannot override
       // unreachable elevation tiles, because there is nothing to render.
       const mayTry = !demFailed && (rung === 0 || (!silent && rung === 1));
       if (kind !== 'plain' && !terrainOn && mayTry) {
-        if (!silent && (hold3d || rung === 1)) { hold3d = false; rung = 0; banner(null); }
+        if (!silent && (hold3d || rung === 1)) {
+          hold3d = false;
+          rung = 0;
+          banner(null);
+        }
         if (!hold3d) {
           enableTerrain();
           if (terrainOn && !reducedMotion()) {
-            try { map.easeTo({ pitch: CAMERA.pitch, bearing: CAMERA.bearing, duration: 600 }); } catch { /* ignore */ }
+            try {
+              map.easeTo({ pitch: CAMERA.pitch, bearing: CAMERA.bearing, duration: 600 });
+            } catch {
+              /* ignore */
+            }
           }
         }
       }
@@ -803,7 +981,11 @@ export function createMapController(opts) {
   function syncHillshade() {
     if (!map || !map.getLayer('hillshade')) return;
     const on = rung < 2 && basemap !== 'plain';
-    try { map.setLayoutProperty('hillshade', 'visibility', on ? 'visible' : 'none'); } catch { /* ignore */ }
+    try {
+      map.setLayoutProperty('hillshade', 'visibility', on ? 'visible' : 'none');
+    } catch {
+      /* ignore */
+    }
   }
 
   // ── atmosphere ──────────────────────────────────────────────────────────
@@ -849,7 +1031,9 @@ export function createMapController(opts) {
         'fog-ground-blend': +(0.06 + 0.62 * t).toFixed(3),
         'atmosphere-blend': +(0.72 - 0.22 * t).toFixed(3)
       });
-    } catch { /* atmosphere is never fatal */ }
+    } catch {
+      /* atmosphere is never fatal */
+    }
   }
 
   // ── framing ─────────────────────────────────────────────────────────────
@@ -860,11 +1044,16 @@ export function createMapController(opts) {
   // tuned on, which on unknown demo hardware is every pane.
   function frameCorridor({ animate = true, duration = 2600 } = {}) {
     if (!map || rung >= 3) return false;
-    const pts = rows.filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)));
+    const pts = rows.filter(
+      (r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon))
+    );
     if (pts.length < 2) return false;
     const lats = pts.map((r) => Number(r.lat));
     const lons = pts.map((r) => Number(r.lon));
-    const bounds = [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]];
+    const bounds = [
+      [Math.min(...lons), Math.min(...lats)],
+      [Math.max(...lons), Math.max(...lats)]
+    ];
     const pitch = terrainOn ? CAMERA.pitch : 0;
     const bearing = terrainOn ? CAMERA.bearing : 0;
     // Fit FLAT, then pitch. cameraForBounds under a 54° pitch fits the bounds
@@ -880,9 +1069,13 @@ export function createMapController(opts) {
         // Room for the map tools top right, and the legend and attribution
         // along the bottom edge.
         padding: { top: 40, bottom: 58, left: 54, right: 54 },
-        bearing, pitch: 0, maxZoom: 10.2
+        bearing,
+        pitch: 0,
+        maxZoom: 10.2
       });
-    } catch { cam = null; }
+    } catch {
+      cam = null;
+    }
     if (!cam || !cam.center || !Number.isFinite(cam.zoom)) return false;
 
     // Pitching the camera compresses the ground plane vertically by cos(pitch)
@@ -895,7 +1088,8 @@ export function createMapController(opts) {
     restCam = {
       center: cam.center,
       zoom: Math.min(10.2, Math.max(7.4, cam.zoom + (pitch > 0 ? boost : 0))),
-      pitch, bearing,
+      pitch,
+      bearing,
       // Sit the corridor a hair above the middle of the pane: the ridgelines
       // above it are where the rim light lives, and they are the whole reason
       // the camera is pitched at all.
@@ -908,7 +1102,9 @@ export function createMapController(opts) {
       } else {
         map.jumpTo(restCam);
       }
-    } catch { return false; }
+    } catch {
+      return false;
+    }
     framed = true;
     verifyFraming(animate ? duration + 120 : 60);
     return true;
@@ -940,9 +1136,13 @@ export function createMapController(opts) {
           if (dz > 0.15 || dp > 2) {
             animationsRun = false;
             map.jumpTo(restCam);
-            log('Map framing: the opening move did not run (no animation frames) — the camera was placed directly.');
+            log(
+              'Map framing: the opening move did not run (no animation frames) — the camera was placed directly.'
+            );
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
 
       const { w, h: hh } = size();
@@ -953,13 +1153,17 @@ export function createMapController(opts) {
       }
       if (off <= 1 || restCam.zoom <= 7.4) return;
       restCam = { ...restCam, zoom: Math.max(7.4, restCam.zoom - 0.55) };
-      log(`Map framing: ${off} settlements fell outside the pane at the fitted zoom — widening once.`);
+      log(
+        `Map framing: ${off} settlements fell outside the pane at the fitted zoom — widening once.`
+      );
       // If the opening ease never ran, an eased correction will not run either.
       const smooth = animationsRun && !reducedMotion();
       try {
         if (smooth) map.easeTo({ ...restCam, duration: 520 });
         else map.jumpTo(restCam);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }, afterMs);
   }
 
@@ -983,11 +1187,14 @@ export function createMapController(opts) {
   }
 
   // ── capability gate (spec §4.6 performance guard) ───────────────────────
-  let webglProbe = null;   // probe once, and hand the context straight back
+  let webglProbe = null; // probe once, and hand the context straight back
   function hasWebGL() {
     if (webglProbe !== null) return webglProbe;
     try {
-      if (typeof WebGL2RenderingContext === 'undefined') { webglProbe = false; return false; }
+      if (typeof WebGL2RenderingContext === 'undefined') {
+        webglProbe = false;
+        return false;
+      }
       const c = document.createElement('canvas');
       const gl = c.getContext('webgl2') || c.getContext('webgl');
       if (gl) {
@@ -998,7 +1205,10 @@ export function createMapController(opts) {
       }
       webglProbe = !!gl;
       return webglProbe;
-    } catch { webglProbe = false; return false; }
+    } catch {
+      webglProbe = false;
+      return false;
+    }
   }
   // Returns null when 3D is safe to start, otherwise the reason it is being held
   // back — which is written to the activity feed verbatim, so the operator can see
@@ -1013,30 +1223,46 @@ export function createMapController(opts) {
     if (w > 0 && w < 1024) return `viewport ${w}px wide (needs 1024)`;
     return null;
   }
-  function wants3d() { return guard3d() === null; }
+  function wants3d() {
+    return guard3d() === null;
+  }
 
   // ── init ────────────────────────────────────────────────────────────────
   async function init() {
     status('Loading terrain…');
-    slowTimer = setTimeout(() => status('Still loading terrain. The list and decisions work without it.'), 6000);
+    slowTimer = setTimeout(
+      () => status('Still loading terrain. The list and decisions work without it.'),
+      6000
+    );
 
     if (!hasWebGL()) {
       clearTimeout(slowTimer);
-      degrade(3, 'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.');
+      degrade(
+        3,
+        'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.'
+      );
       return;
     }
 
     try {
       ml = await Promise.race([
         import('./vendor/maplibre-gl.mjs'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('library load timed out')), LIB_TIMEOUT_MS))
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('library load timed out')), LIB_TIMEOUT_MS)
+        )
       ]);
     } catch (err) {
       clearTimeout(slowTimer);
-      degrade(3, 'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.');
+      degrade(
+        3,
+        'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.'
+      );
       return;
     }
-    if (destroyed) { clearTimeout(slowTimer); return; }
+    if (destroyed) {
+      clearTimeout(slowTimer);
+      return;
+    }
 
     const heldBecause = guard3d();
     const start3d = heldBecause === null;
@@ -1048,9 +1274,9 @@ export function createMapController(opts) {
         zoom: reducedMotion() || !start3d ? CAMERA.zoom : OPENING.zoom,
         pitch: start3d ? (reducedMotion() ? CAMERA.pitch : OPENING.pitch) : 0,
         bearing: start3d ? CAMERA.bearing : 0,
-        maxBounds: MAX_BOUNDS,      // users cannot spin into empty space
+        maxBounds: MAX_BOUNDS, // users cannot spin into empty space
         minZoom: 6.8,
-        maxZoom: 13,                // caps DEM/imagery tile fetches. Never raise it.
+        maxZoom: 13, // caps DEM/imagery tile fetches. Never raise it.
         maxPitch: 70,
         dragRotate: true,
         touchPitch: true,
@@ -1060,7 +1286,10 @@ export function createMapController(opts) {
       });
     } catch (err) {
       clearTimeout(slowTimer);
-      degrade(3, 'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.');
+      degrade(
+        3,
+        'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.'
+      );
       return;
     }
 
@@ -1069,10 +1298,17 @@ export function createMapController(opts) {
       const msg = (e && e.error && e.error.message) || '';
       if (sid === 'terrainDEM' || sid === 'hillshadeDEM') {
         demErrors++;
-        if (demErrors >= 4) { demFailed = true; degrade(1, '3D terrain unavailable — the elevation tiles are unreachable. Showing flat imagery.'); }
+        if (demErrors >= 4) {
+          demFailed = true;
+          degrade(
+            1,
+            '3D terrain unavailable — the elevation tiles are unreachable. Showing flat imagery.'
+          );
+        }
       } else if (sid === 'satellite' || sid === 'street') {
         satErrors++;
-        if (satErrors >= 6) degrade(2, 'Basemap tiles unreachable — showing the data layer on a plain background.');
+        if (satErrors >= 6)
+          degrade(2, 'Basemap tiles unreachable — showing the data layer on a plain background.');
       } else if (msg) {
         log(`Map engine reported: ${msg}`);
       }
@@ -1091,11 +1327,21 @@ export function createMapController(opts) {
       clearTimeout(watchdog);
       watchdog = setTimeout(() => {
         if (destroyed || !map) return;
-        if (document.visibilityState === 'hidden') { armWatchdog(); return; }
+        if (document.visibilityState === 'hidden') {
+          armWatchdog();
+          return;
+        }
         let ok = false;
-        try { ok = map.isStyleLoaded(); } catch { ok = false; }
+        try {
+          ok = map.isStyleLoaded();
+        } catch {
+          ok = false;
+        }
         if (!ok) {
-          degrade(3, 'Map engine did not finish starting — showing a coordinate plot. All rankings and decisions still work.');
+          degrade(
+            3,
+            'Map engine did not finish starting — showing a coordinate plot. All rankings and decisions still work.'
+          );
           return;
         }
         // The style IS loaded and yet `load` has not fired. MapLibre withholds
@@ -1106,7 +1352,9 @@ export function createMapController(opts) {
         // grey plane": terrain never switches on, the status line says "still
         // loading" forever, and no banner ever explains why. Start the scene on
         // what has actually arrived instead of on an event that may not come.
-        log('Map engine finished its style but never reported "load" — starting the terrain scene on the style instead.');
+        log(
+          'Map engine finished its style but never reported "load" — starting the terrain scene on the style instead.'
+        );
         onStyleReady();
       }, 12000);
     };
@@ -1125,11 +1373,21 @@ export function createMapController(opts) {
       clearTimeout(supplyTimer);
       supplyTimer = setTimeout(() => {
         if (destroyed || !map || rung >= 2) return;
-        if (document.visibilityState === 'hidden') { armSupplyWatchdog(); return; }
+        if (document.visibilityState === 'hidden') {
+          armSupplyWatchdog();
+          return;
+        }
         let done = false;
-        try { done = map.loaded(); } catch { done = false; }
+        try {
+          done = map.loaded();
+        } catch {
+          done = false;
+        }
         if (!done && satErrors > 0) {
-          degrade(2, 'Basemap tiles are not arriving — showing the data layer on a plain background.');
+          degrade(
+            2,
+            'Basemap tiles are not arriving — showing the data layer on a plain background.'
+          );
         } else if (!done) {
           // Not loaded, but no tile error has registered yet - that is still just
           // slow. Look again rather than either condemning it or giving up on it.
@@ -1141,7 +1399,9 @@ export function createMapController(opts) {
 
     // Coming back to a foregrounded tab, give the engine a fresh window to finish
     // rather than judging it on time it spent suspended.
-    const onVisible = () => { if (document.visibilityState === 'visible' && map && !destroyed) armWatchdog(); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && map && !destroyed) armWatchdog();
+    };
     document.addEventListener('visibilitychange', onVisible);
     map.on('load', () => document.removeEventListener('visibilitychange', onVisible));
 
@@ -1157,8 +1417,12 @@ export function createMapController(opts) {
       status(null);
       if (!start3d) {
         hold3d = true;
-        banner(`3D terrain held back by the hardware guard (${heldBecause}) — flat imagery shown. Press Terrain to turn it on anyway.`);
-        log(`3D terrain held back by the hardware guard: ${heldBecause}. Flat imagery shown; the Terrain button overrides it.`);
+        banner(
+          `3D terrain held back by the hardware guard (${heldBecause}) — flat imagery shown. Press Terrain to turn it on anyway.`
+        );
+        log(
+          `3D terrain held back by the hardware guard: ${heldBecause}. Flat imagery shown; the Terrain button overrides it.`
+        );
       } else {
         enableTerrain();
         applyAtmosphere();
@@ -1167,7 +1431,11 @@ export function createMapController(opts) {
       // If the ranking beat the tiles here, frame on it now; otherwise setData
       // does it the moment the corridor arrives.
       if (!frameCorridor({ animate: true }) && start3d && !reducedMotion()) {
-        try { map.easeTo({ ...CAMERA, duration: 2600, easing: (x) => 1 - Math.pow(1 - x, 3) }); } catch { /* ignore */ }
+        try {
+          map.easeTo({ ...CAMERA, duration: 2600, easing: (x) => 1 - Math.pow(1 - x, 3) });
+        } catch {
+          /* ignore */
+        }
       }
       reposition();
       sampleFrames();
@@ -1181,16 +1449,23 @@ export function createMapController(opts) {
     // then on the framing corrector keeps its hands off; "Reset view" is how the
     // operator asks for the fitted frame back.
     for (const ev of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart']) {
-      map.on(ev, (e) => { if (e && e.originalEvent) userMoved = true; });
+      map.on(ev, (e) => {
+        if (e && e.originalEvent) userMoved = true;
+      });
     }
-    map.on('dataloading', () => { tileRequests++; });
+    map.on('dataloading', () => {
+      tileRequests++;
+    });
 
     const canvas = map.getCanvas ? map.getCanvas() : null;
     if (canvas) {
       canvas.setAttribute('aria-hidden', 'true');
       canvas.setAttribute('tabindex', '-1');
       canvas.addEventListener('webglcontextlost', () => {
-        degrade(3, 'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.');
+        degrade(
+          3,
+          'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.'
+        );
       });
     }
   }
@@ -1211,19 +1486,28 @@ export function createMapController(opts) {
     const tick = () => {
       frames++;
       const dt = performance.now() - t0;
-      if (dt < 4000) { requestAnimationFrame(tick); return; }
+      if (dt < 4000) {
+        requestAnimationFrame(tick);
+        return;
+      }
       const mean = dt / Math.max(1, frames);
       // Too few frames means the page was not being painted at all (hidden pane,
       // suspended compositor). That is unknown, not slow — do not punish it.
-      if (frames < 24) return;   // the page was not being painted: unknown, not slow
+      if (frames < 24) return; // the page was not being painted: unknown, not slow
       // Two thresholds, cheapest thing first. Between 22 and 25fps the scene is
       // holding but the soft effects are not free, so they go before the terrain
       // does — every one of them has a static form that still says the same thing.
       if (mean > 40 && terrainOn) {
-        degrade(1, `3D terrain dropped — this device rendered at ${(1000 / mean).toFixed(0)}fps. Showing flat imagery.`);
+        degrade(
+          1,
+          `3D terrain dropped — this device rendered at ${(1000 / mean).toFixed(0)}fps. Showing flat imagery.`
+        );
         setFx('lite', `${(1000 / mean).toFixed(0)}fps`);
       } else if (mean > 26) {
-        setFx('lite', `${(1000 / mean).toFixed(0)}fps — rings, void and corridor pulses are now static`);
+        setFx(
+          'lite',
+          `${(1000 / mean).toFixed(0)}fps — rings, void and corridor pulses are now static`
+        );
       }
     };
     requestAnimationFrame(tick);
@@ -1239,7 +1523,11 @@ export function createMapController(opts) {
       buildMarkers();
       status(rows.length ? null : 'No settlements plotted yet.');
       let styled = false;
-      try { styled = !!(map && map.isStyleLoaded()); } catch { styled = false; }
+      try {
+        styled = !!(map && map.isStyleLoaded());
+      } catch {
+        styled = false;
+      }
       if (!framed && styled) frameCorridor({ animate: true });
       // After the markers and edges exist, and only for a real classification
       // change the server just made.
@@ -1259,11 +1547,19 @@ export function createMapController(opts) {
     },
 
     /** The theme flipped; the sky belongs to the theme. */
-    refreshAtmosphere() { applyAtmosphere(); },
+    refreshAtmosphere() {
+      applyAtmosphere();
+    },
 
     /** Debug/demo handle: fire the corridor propagation pulse into one node. */
-    demoPulse(id) { pulseInto(id); },
-    setAdjacency(a) { adjacency = a || {}; buildLines(); reposition(); },
+    demoPulse(id) {
+      pulseInto(id);
+    },
+    setAdjacency(a) {
+      adjacency = a || {};
+      buildLines();
+      reposition();
+    },
     setPending(ids) {
       pending = new Set(ids || []);
       for (const [id, m] of markers) {
@@ -1284,7 +1580,11 @@ export function createMapController(opts) {
       // the settlement the operator just asked to look at.
       clearTimeout(verifyTimer);
       const target = { center: [m.row.lon, m.row.lat], zoom: Math.max(map.getZoom(), 10.2) };
-      try { map.easeTo({ ...target, duration: reducedMotion() ? 0 : 900 }); } catch { /* ignore */ }
+      try {
+        map.easeTo({ ...target, duration: reducedMotion() ? 0 : 900 });
+      } catch {
+        /* ignore */
+      }
     },
     hover(id, on) {
       const m = markers.get(id);
@@ -1306,28 +1606,63 @@ export function createMapController(opts) {
               bearing: terrainOn ? restCam.bearing : 0,
               duration: reducedMotion() ? 0 : 700
             });
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
       }
       reposition();
     },
-    setBasemap(kind) { applyBasemap(kind); },
-    resize() { if (map) { try { map.resize(); } catch { /* ignore */ } } reposition(); },
+    setBasemap(kind) {
+      applyBasemap(kind);
+    },
+    resize() {
+      if (map) {
+        try {
+          map.resize();
+        } catch {
+          /* ignore */
+        }
+      }
+      reposition();
+    },
     reposition,
-    get rung() { return rung; },
-    get engine() { return map; },   // debug handle, also handy live: window.signalZeroMap.engine
-    get terrainOn() { return terrainOn; },
-    destroy() { destroyed = true; if (map) { try { map.remove(); } catch { /* ignore */ } } }
+    get rung() {
+      return rung;
+    },
+    get engine() {
+      return map;
+    }, // debug handle, also handy live: window.signalZeroMap.engine
+    get terrainOn() {
+      return terrainOn;
+    },
+    destroy() {
+      destroyed = true;
+      if (map) {
+        try {
+          map.remove();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   };
 
   // Draw the overlay immediately with the fallback projector, then let MapLibre
   // take over. First paint never waits on the network.
   window.addEventListener('resize', () => api.resize());
   init().catch((err) => {
-    degrade(3, 'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.');
+    degrade(
+      3,
+      'Map engine unavailable — showing a coordinate plot. All rankings and decisions still work.'
+    );
     log(`Map init threw: ${err && err.message}`);
   });
 
-  try { window.signalZeroMap = api; } catch { /* ignore */ }
+  try {
+    window.signalZeroMap = api;
+  } catch {
+    /* ignore */
+  }
   return api;
 }

@@ -392,9 +392,10 @@ export async function probe() {
     telemetry.lastError = null;
     return { ok: true, degraded: false, reason: null, models, agentRegistered: true };
   } catch (err) {
-    const reason = err?.name === 'TimeoutError'
-      ? `no response within ${PROBE_TIMEOUT_MS}ms`
-      : String(err && err.message ? err.message : err);
+    const reason =
+      err?.name === 'TimeoutError'
+        ? `no response within ${PROBE_TIMEOUT_MS}ms`
+        : String(err && err.message ? err.message : err);
     telemetry.reachable = false;
     telemetry.lastError = reason;
     return { ok: false, reason };
@@ -718,15 +719,38 @@ export async function runTurn(instructions, prompt) {
   const agentId = session.agentId;
   let evict = false;
   try {
-    return await executeTurn({ c, session, sid, created, binding, agentId, prompt, startedAt, seq,
-      markEvict: () => { evict = true; } });
+    return await executeTurn({
+      c,
+      session,
+      sid,
+      created,
+      binding,
+      agentId,
+      prompt,
+      startedAt,
+      seq,
+      markEvict: () => {
+        evict = true;
+      }
+    });
   } finally {
     releaseSession(session, { evict });
   }
 }
 
 /** The body of one turn. Split out so `runTurn` owns acquire/release only. */
-async function executeTurn({ c, session, sid, created, binding, agentId, prompt, startedAt, seq, markEvict }) {
+async function executeTurn({
+  c,
+  session,
+  sid,
+  created,
+  binding,
+  agentId,
+  prompt,
+  startedAt,
+  seq,
+  markEvict
+}) {
   let turnRes;
   try {
     turnRes = await c.sessions.createTurn(sid, {
@@ -755,7 +779,9 @@ async function executeTurn({ c, session, sid, created, binding, agentId, prompt,
 
   while (!TERMINAL.has(state?.status)) {
     if (Date.now() >= deadline) {
-      throw new Error(`turn ${turnId} still ${state?.status || 'running'} after ${config.TRUEFORGE_TIMEOUT_MS}ms`);
+      throw new Error(
+        `turn ${turnId} still ${state?.status || 'running'} after ${config.TRUEFORGE_TIMEOUT_MS}ms`
+      );
     }
     // A turn parked on an approval decision will never advance on its own. The
     // tier-3 agent has no tools so this cannot happen today; if the roster ever
@@ -851,7 +877,8 @@ export function countGuardrail(phase, blocked, rules = []) {
   } else {
     telemetry.guardrail.advisory += 1;
   }
-  for (const r of rules) if (!telemetry.guardrail.rules.includes(r)) telemetry.guardrail.rules.push(r);
+  for (const r of rules)
+    if (!telemetry.guardrail.rules.includes(r)) telemetry.guardrail.rules.push(r);
 }
 
 /** Record the reason the harness could not be used, for the incident feed. */

@@ -560,9 +560,7 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
         counted += 1;
       }
     }
-    const representativePop = counted
-      ? Math.exp(logSum / counted)
-      : PRIOR_REFERENCE_POPULATION;
+    const representativePop = counted ? Math.exp(logSum / counted) : PRIOR_REFERENCE_POPULATION;
     cohortPrior.set(key, priorRatePerHour(tier, representativePop));
   }
   const priorFor = (key) => cohortPrior.get(key) ?? 1 / PRIOR_EXPECTED_GAP_HOURS;
@@ -675,7 +673,11 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
     // for it is borrowed from its cohort, so the UI must say so out loud.
     const coverageBasis = times.length > 0 ? 'reports' : 'cohort-cold-start';
 
-    if (coverageBasis === 'cohort-cold-start' && emitIncidents && coldStartsLogged < MAX_COLD_START_INCIDENTS) {
+    if (
+      coverageBasis === 'cohort-cold-start' &&
+      emitIncidents &&
+      coldStartsLogged < MAX_COLD_START_INCIDENTS
+    ) {
       coldStartsLogged++;
       addIncident(
         'cold-start',
@@ -766,7 +768,9 @@ export function rank(settlements, clusters, reports, now, opts = {}) {
       : row.isRegionalOutage
         ? 'regional-outage'
         : row.isLocalAnomaly
-          ? (g.ownZ > 0 ? 'silent-cluster' : 'cluster-edge')
+          ? g.ownZ > 0
+            ? 'silent-cluster'
+            : 'cluster-edge'
           : 'none';
   }
 

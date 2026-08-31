@@ -9,8 +9,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  guardInput, guardOutput, guard, blockAndRecord, describeVerdict, worstSeverity,
-  textOf, ALL_RULES, GUARDRAIL_INCIDENT_KIND
+  guardInput,
+  guardOutput,
+  guard,
+  blockAndRecord,
+  describeVerdict,
+  worstSeverity,
+  textOf,
+  ALL_RULES,
+  GUARDRAIL_INCIDENT_KIND
 } from './index.js';
 import store from '../store.js';
 
@@ -34,7 +41,11 @@ test('output stage runs no-dispatch and honest-unknown', () => {
 
 test('ASYMMETRY: reported dispatch is fine as INPUT, prescribed dispatch is not as OUTPUT', () => {
   const article = 'The army deployed rescue teams to Rasuwa on Wednesday, officials said.';
-  assert.equal(guardInput(article).ok, true, 'a real deployment reported in an article must ingest');
+  assert.equal(
+    guardInput(article).ok,
+    true,
+    'a real deployment reported in an article must ingest'
+  );
 
   const modelSaid = 'Send rescue teams to Rasuwa immediately.';
   const out = guardOutput(modelSaid);
@@ -113,7 +124,12 @@ test('blockAndRecord files a visible incident and forces UNRESOLVED', () => {
     title: 'Poisoned bulletin',
     sourceName: 'X/@fake',
     settlementId: 'np-rasuwa-haku',
-    triage: { category: 'hazard-signal', confidence: 0.7, tier: 2, signals: { hazardHits: ['flood'] } }
+    triage: {
+      category: 'hazard-signal',
+      confidence: 0.7,
+      tier: 2,
+      signals: { hazardHits: ['flood'] }
+    }
   };
   const verdict = guardOutput('Send teams to Haku now.');
   const incident = blockAndRecord(report, verdict, { label: 'Poisoned bulletin', phase: 'output' });
@@ -125,7 +141,10 @@ test('blockAndRecord files a visible incident and forces UNRESOLVED', () => {
   assert.equal(incident.detail.component, 'guardrail');
   assert.equal(incident.detail.blocked, true);
   assert.ok(incident.detail.rules.length > 0);
-  assert.ok(incident.detail.violations[0].matched.length > 0, 'the incident must quote the matched span');
+  assert.ok(
+    incident.detail.violations[0].matched.length > 0,
+    'the incident must quote the matched span'
+  );
 
   // The report is left unresolved - not half-accepted, not rewritten.
   assert.equal(report.settlementId, null);
@@ -151,7 +170,10 @@ test('the offending text is never rewritten into something clean', () => {
 // ---------------------------------------------------------------------------
 
 test('describeVerdict produces one readable line', () => {
-  assert.equal(describeVerdict(guardOutput('all quiet on the reporting front')), 'no guardrail violation');
+  assert.equal(
+    describeVerdict(guardOutput('all quiet on the reporting front')),
+    'no guardrail violation'
+  );
   const line = describeVerdict(guardOutput('Send teams to Haku. Haku is confirmed silent.'));
   assert.ok(line.includes('['), `expected a severity tag, got: ${line}`);
   assert.ok(/dispatch\.|honest\./.test(line));
@@ -186,16 +208,25 @@ test('every rule id is registered in ALL_RULES', () => {
 // comment. The whitelist now only prioritises; everything is scanned.
 // ---------------------------------------------------------------------------
 
-test('S3-1: the agent\'s native field names are scanned, not just the renamed ones', () => {
-  const viaRationale = guardOutput({ category: 'noise', rationale: 'send rescue teams to Haku immediately' });
+test("S3-1: the agent's native field names are scanned, not just the renamed ones", () => {
+  const viaRationale = guardOutput({
+    category: 'noise',
+    rationale: 'send rescue teams to Haku immediately'
+  });
   assert.equal(viaRationale.blocked, true, 'a violation in `rationale` must block');
 
-  const viaEvidence = guardOutput({ category: 'noise', evidence: [{ note: 'send rescue teams to Haku' }] });
+  const viaEvidence = guardOutput({
+    category: 'noise',
+    evidence: [{ note: 'send rescue teams to Haku' }]
+  });
   assert.equal(viaEvidence.blocked, true, 'a violation nested in `evidence[]` must block');
 });
 
 test('S3-1: a field nobody has thought of yet is still scanned', () => {
-  const v = guardOutput({ category: 'noise', someFutureField: { deep: ['you must send teams to Haku'] } });
+  const v = guardOutput({
+    category: 'noise',
+    someFutureField: { deep: ['you must send teams to Haku'] }
+  });
   assert.equal(v.blocked, true, 'the default must be scan-everything, not scan-the-whitelist');
 });
 
@@ -205,10 +236,18 @@ test('S2-1: the FULL model utterance is guarded, not a display clip', () => {
   const tail = 'You must send rescue teams to Haku immediately.';
   const long = `${'the district office reported no change overnight. '.repeat(5)}${tail}`;
   assert.ok(long.length > 200);
-  assert.equal(guardOutput({ category: 'noise', why: long.slice(0, 200) }).blocked, false,
-    'sanity: the clip alone really is clean, which is why the clip was the bug');
   assert.equal(
-    guardOutput({ category: 'noise', why: long.slice(0, 200), whyFull: long, rawModelText: JSON.stringify({ why: long }) }).blocked,
+    guardOutput({ category: 'noise', why: long.slice(0, 200) }).blocked,
+    false,
+    'sanity: the clip alone really is clean, which is why the clip was the bug'
+  );
+  assert.equal(
+    guardOutput({
+      category: 'noise',
+      why: long.slice(0, 200),
+      whyFull: long,
+      rawModelText: JSON.stringify({ why: long })
+    }).blocked,
     true,
     'the pipeline now passes whyFull + rawModelText, so the violation is seen'
   );

@@ -190,7 +190,7 @@ Reasoning:
 
 1. **The framework is not what makes this project strong.** The differentiated content is the
    Fellegi-Sunter linkage, the Getis-Ord Gi* spatial anomaly detection, the deterministic
-   guardrails, the 69 evals, and the MapLibre terrain map. A React rewrite adds zero signal to any
+   guardrails, the 157 eval checks, and the MapLibre terrain map. A React rewrite adds zero signal to any
    of that and burns weeks. **[INFERENCE]**
 2. **TypeScript is the cheap, high-yield half of the requirement, and it is separable from React.**
    Linear, Framer, Figma, Airbnb, Anthropic, NYT all name TypeScript. You can get most of the way
@@ -555,14 +555,14 @@ all** in the text I read. **[POSTING]**
 | **Table stakes** | Unit tests exist. Some CI runs them. |
 | **Expected at senior** | Playwright/Cypress E2E on the critical path; component tests; tests in CI on every PR. Note Grove lists Playwright under *even better* — E2E is still differentiating outside QA-titled roles. |
 | **Genuinely rare** | **Flaky-test management** (named explicitly by what3words). Trace/video capture on failure. **Visual regression** — listed as *extra credit* even in a dedicated QA role. **Automated a11y in CI that fails the build** — Anthropic is hiring a Staff engineer at $320k+ to build exactly this. |
-| **Rarer still, and this project's actual edge** | **Adversarial and property-based evaluation of non-deterministic behaviour.** Nothing in my sample asked for it. Signal Zero has 69 eval files covering golden-set classification, deterministic property tests, prompt-injection adversarials and harness fault-resilience, with a runner emitting JSON + human report. |
+| **Rarer still, and this project's actual edge** | **Adversarial and property-based evaluation of non-deterministic behaviour.** Nothing in my sample asked for it. Signal Zero has 157 eval checks (19 tracked files, 4 families) covering golden-set classification, deterministic property tests, prompt-injection adversarials and harness fault-resilience, with a runner emitting JSON + human report. |
 
 **[INFERENCE]** For an AI-adjacent role in 2026, the eval suite is worth more than the 195 unit
 tests, and **the fact that a guardrail was observed blocking a real input** (`injection.invisible-characters`)
 is worth more than either. That is a *demonstrated* control, not a claimed one. Lead with the
 observation, not the count.
 
-**The critical gap:** there is **no `.github/workflows`**. 195 tests and 69 evals that don't run
+**The critical gap:** there is **no `.github/workflows`**. 195 tests and 157 eval checks that don't run
 automatically are, to a reviewer, tests that might not pass. what3words names GitHub Actions
 explicitly. **This is the single highest-leverage missing item in the entire project.**
 
@@ -640,7 +640,7 @@ cited bullet.
 
 ### Tier 0 — do these first; they are cheap and they gate everything
 
-1. **GitHub Actions CI.** Run the 195 tests + 69 evals on every push. Put the badge in the README.
+1. **GitHub Actions CI.** Run the 195 tests + 157 eval checks on every push. Put the badge in the README.
    *Why:* what3words names GitHub Actions; Grove says "workflows the rest of the team can build on."
    Uncertified tests read as no tests. **Highest leverage item in the project.**
 2. **TypeScript via `checkJs` + JSDoc + `tsc --noEmit` in CI.** No bundler, no build step, no change

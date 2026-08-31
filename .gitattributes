@@ -1,0 +1,27 @@
+# Normalise line endings so a Windows checkout and a Linux CI runner agree.
+#
+# Without this, every `git add` on Windows prints "LF will be replaced by CRLF"
+# and a formatter configured for LF fights the working tree on every commit.
+# Biome writes LF (see biome.json formatter.lineEnding); this keeps the index LF
+# too, and lets Git hand Windows whatever the platform prefers on checkout.
+
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Vendored third-party code: keep byte-identical to upstream so the checkout can
+# be diffed against the published package.
+web/vendor/** -text -diff linguist-vendored
+
+# Generated: collapse in review, and do not let a reviewer read 139k of JSON.
+evals/report/*.json linguist-generated
+package-lock.json linguist-generated -diff

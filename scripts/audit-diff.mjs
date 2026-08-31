@@ -281,10 +281,14 @@ const isGuardrailDefinition = (file, ruleId) =>
  * backticks on a line that also carries a negation is a MENTION.
  */
 function isMention(text, match) {
-  const quoted = new RegExp(`["'\`“”]\\s*${match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(text);
-  const negated = /\b(never|not|no|must not|cannot|refuse|refused|forbidden|banned|prohibit\w*|violation|blocked|instead of|rather than)\b/i.test(
-    text
-  );
+  const quoted = new RegExp(
+    `["'\`“”]\\s*${match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+    'i'
+  ).test(text);
+  const negated =
+    /\b(never|not|no|must not|cannot|refuse|refused|forbidden|banned|prohibit\w*|violation|blocked|instead of|rather than)\b/i.test(
+      text
+    );
   return quoted && negated;
 }
 
@@ -300,11 +304,34 @@ function isMention(text, match) {
 
 /** Field names that name who goes where. Matched only in key/assignment position. */
 const DISPATCH_FIELDS = [
-  'dispatchTo', 'dispatch', 'dispatchedTo', 'dispatchTeam', 'assignedTo', 'assignTo',
-  'assignee', 'deployTo', 'deployedTo', 'deployment', 'sendTo', 'sentTo', 'recipient',
-  'recipients', 'destination', 'responder', 'responders', 'crew', 'squad', 'unit',
-  'eta', 'route', 'routeTo', 'waypoint', 'priorityDeployment', 'deploymentPriority',
-  'taskedTo', 'goTo'
+  'dispatchTo',
+  'dispatch',
+  'dispatchedTo',
+  'dispatchTeam',
+  'assignedTo',
+  'assignTo',
+  'assignee',
+  'deployTo',
+  'deployedTo',
+  'deployment',
+  'sendTo',
+  'sentTo',
+  'recipient',
+  'recipients',
+  'destination',
+  'responder',
+  'responders',
+  'crew',
+  'squad',
+  'unit',
+  'eta',
+  'route',
+  'routeTo',
+  'waypoint',
+  'priorityDeployment',
+  'deploymentPriority',
+  'taskedTo',
+  'goTo'
 ];
 
 // Two shapes only, and both of them are FIELDS:
@@ -508,7 +535,8 @@ async function waitForTurn(sessionId, turnId, timeoutMs) {
     const turn = await api('GET', `/api/v1/sessions/${sessionId}/turns/${turnId}`);
     const status = turn?.state?.status;
     if (status && TERMINAL.has(status)) return turn;
-    if (Date.now() > deadline) throw new Error(`turn ${turnId} still ${status} after ${timeoutMs}ms`);
+    if (Date.now() > deadline)
+      throw new Error(`turn ${turnId} still ${status} after ${timeoutMs}ms`);
     await sleep(2000);
   }
 }
@@ -750,7 +778,8 @@ const SEV_ORDER = { critical: 0, major: 1, minor: 2 };
 const bar = (c = '=') => c.repeat(78);
 
 function printFinding(f, i) {
-  const flag = f.stage === 'model' && !f.quoteVerified ? '  [UNVERIFIED QUOTE — DOES NOT GATE]' : '';
+  const flag =
+    f.stage === 'model' && !f.quoteVerified ? '  [UNVERIFIED QUOTE — DOES NOT GATE]' : '';
   console.log(
     `\n  ${String(i + 1).padStart(2)}. [${f.severity.toUpperCase()}] ${f.rule}   (${f.stage})${flag}`
   );
@@ -767,7 +796,13 @@ function printFinding(f, i) {
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log(readFileSync(new URL(import.meta.url)).toString().split('\n').slice(0, 70).join('\n'));
+    console.log(
+      readFileSync(new URL(import.meta.url))
+        .toString()
+        .split('\n')
+        .slice(0, 70)
+        .join('\n')
+    );
     process.exit(EXIT_CLEAN);
   }
 
@@ -795,10 +830,16 @@ function main() {
     console.log('SIGNAL ZERO — DIFF AUDIT (repository gate, four hard rules)');
     console.log(bar());
     console.log(`source        : ${source}`);
-    console.log(`diff size     : ${Buffer.byteLength(rawDiff, 'utf8')} bytes, ${added.length} added lines`);
+    console.log(
+      `diff size     : ${Buffer.byteLength(rawDiff, 'utf8')} bytes, ${added.length} added lines`
+    );
     console.log(`files touched : ${new Set(added.map((a) => a.file)).size}`);
-    console.log(`auditor       : ${AGENT} @ ${BASE}${opts.useModel ? '' : '   (--no-model: SKIPPED)'}`);
-    console.log(`mode          : ${opts.strict ? 'STRICT — every path gates' : 'default — findings in docs/evals/tests are reported but do not gate'}`);
+    console.log(
+      `auditor       : ${AGENT} @ ${BASE}${opts.useModel ? '' : '   (--no-model: SKIPPED)'}`
+    );
+    console.log(
+      `mode          : ${opts.strict ? 'STRICT — every path gates' : 'default — findings in docs/evals/tests are reported but do not gate'}`
+    );
     if (truncated) {
       console.log(
         `TRUNCATION    : diff exceeds --max-bytes=${opts.maxBytes}; the model sees the FIRST ` +
@@ -808,7 +849,8 @@ function main() {
   }
 
   if (!rawDiff.trim()) {
-    if (opts.json) console.log(JSON.stringify({ source, empty: true, exitCode: EXIT_CLEAN }, null, 2));
+    if (opts.json)
+      console.log(JSON.stringify({ source, empty: true, exitCode: EXIT_CLEAN }, null, 2));
     else console.log('\nNothing to audit — the diff is empty.\n');
     process.exit(EXIT_CLEAN);
   }
@@ -818,13 +860,21 @@ function main() {
     console.log(`\n${bar('-')}`);
     console.log('STAGE 1 — deterministic pre-check (no model, runs first, gates on its own)');
     console.log(bar('-'));
-    if (!stage1.length) console.log('  clean: no dispatch-shaped, approver-defaulting, LLM-in-math or');
+    if (!stage1.length)
+      console.log('  clean: no dispatch-shaped, approver-defaulting, LLM-in-math or');
     if (!stage1.length) console.log('  silence-as-fact pattern in any added line.');
     else stage1.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]).forEach(printFinding);
   }
 
   // ---- Stage 2 --------------------------------------------------------------
-  let stage2 = { attempted: false, ok: false, findings: [], warning: null, verified: [], notChecked: [] };
+  let stage2 = {
+    attempted: false,
+    ok: false,
+    findings: [],
+    warning: null,
+    verified: [],
+    notChecked: []
+  };
   if (opts.useModel) {
     stage2 = await runStage2(diffForModel, source, truncated, stage1, opts);
     stage2.findings = verifyQuotes(stage2.findings, added, opts.strict);
@@ -841,7 +891,8 @@ function main() {
       console.log('  This gate does NOT fail closed on infrastructure. Stage 1 determines the');
       console.log('  exit code. A gate that blocks commits when a container is down is a gate');
       console.log('  people disable, and a disabled gate protects nothing.');
-      if (stage2.rawHead) console.log(`\n  raw output head:\n  ${stage2.rawHead.replace(/\n/g, '\n  ')}`);
+      if (stage2.rawHead)
+        console.log(`\n  raw output head:\n  ${stage2.rawHead.replace(/\n/g, '\n  ')}`);
     } else {
       console.log(`  binding    : ${stage2.binding}   agent id ${stage2.agentId}`);
       console.log(`  session    : ${stage2.sessionId}`);
@@ -861,7 +912,9 @@ function main() {
       if (stage2.verified.length) {
         console.log(`\n  verified by the auditor (${stage2.verified.length}):`);
         for (const v of stage2.verified.slice(0, 8)) {
-          console.log(`    - ${v.rule ?? '?'} — ${v.file ?? '?'} — ${String(v.evidence ?? '').slice(0, 150)}`);
+          console.log(
+            `    - ${v.rule ?? '?'} — ${v.file ?? '?'} — ${String(v.evidence ?? '').slice(0, 150)}`
+          );
         }
       }
       if (stage2.notChecked.length) {
@@ -878,7 +931,9 @@ function main() {
     ...stage1.filter((f) => f.severity === 'critical'),
     ...stage2.findings.filter((f) => f.severity === 'critical' && f.quoteVerified)
   ];
-  const advisoryCritical = stage2.findings.filter((f) => f.severity === 'critical' && !f.quoteVerified);
+  const advisoryCritical = stage2.findings.filter(
+    (f) => f.severity === 'critical' && !f.quoteVerified
+  );
   const exitCode = gating.length ? EXIT_VIOLATION : EXIT_CLEAN;
 
   if (opts.json) {
@@ -933,14 +988,20 @@ function main() {
       `                 ${advisoryCritical.length} model critical(s) had quotes NOT found in the diff — advisory only.`
     );
   }
-  if (truncated) console.log('PARTIAL AUDIT  : the model saw a truncated diff. This is not a clean bill of health.');
+  if (truncated)
+    console.log(
+      'PARTIAL AUDIT  : the model saw a truncated diff. This is not a clean bill of health.'
+    );
   console.log(bar());
   if (exitCode === EXIT_VIOLATION) {
-    console.log(`GATE: FAIL — ${gating.length} critical finding(s) breach a hard rule. exit ${EXIT_VIOLATION}`);
+    console.log(
+      `GATE: FAIL — ${gating.length} critical finding(s) breach a hard rule. exit ${EXIT_VIOLATION}`
+    );
     console.log('This script reports. It has not changed a single line of your code.');
   } else {
     console.log(`GATE: PASS — no gating critical finding. exit ${EXIT_CLEAN}`);
-    if (stage2.warning) console.log('NOTE: passed on stage 1 alone; the model opinion was unavailable.');
+    if (stage2.warning)
+      console.log('NOTE: passed on stage 1 alone; the model opinion was unavailable.');
   }
   console.log(bar());
   process.exit(exitCode);

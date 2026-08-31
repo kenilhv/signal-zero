@@ -111,4 +111,6 @@ const out = {
 
 fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
 if (stub) await stub.close();
-console.log(`fault[${mode}]: survived=${out.survived} elapsed=${elapsedMs}ms incidents=${out.incidents.length}`);
+console.log(
+  `fault[${mode}]: survived=${out.survived} elapsed=${elapsedMs}ms incidents=${out.incidents.length}`
+);

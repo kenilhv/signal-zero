@@ -58,17 +58,29 @@ export const DISPATCH_KEYS = new Set([
 // in the past tense are handled by the source-text scope rule above, not here.
 export const DISPATCH_PATTERNS = [
   { id: 'dispatch-verb', re: /\bdispatch(?:es|ing|ed)?\b/i },
-  { id: 'send-team', re: /\bsend(?:ing)?\s+(?:a\s+|the\s+|two\s+|\d+\s+)?(?:team|teams|crew|responder|responders|rescue|helicopter|personnel)\b/i },
+  {
+    id: 'send-team',
+    re: /\bsend(?:ing)?\s+(?:a\s+|the\s+|two\s+|\d+\s+)?(?:team|teams|crew|responder|responders|rescue|helicopter|personnel)\b/i
+  },
   { id: 'deploy-to', re: /\bdeploy(?:ing|ed)?\s+(?:\w+\s+){0,3}\bto\b/i },
   // Both voices. "assign a team to X" and "responders assigned to X" are the
   // same instruction; an early version of this detector only caught the first,
   // which is exactly the kind of blind spot C0 exists to catch.
-  { id: 'assign-responders', re: /\bassign(?:ing|ed)?\s+(?:\w+\s+){0,3}(?:team|teams|responder|responders|crew|unit|units|personnel)\b/i },
-  { id: 'responders-assigned', re: /\b(?:team|teams|responder|responders|crew|unit|units|personnel|helicopter)\s+(?:\w+\s+){0,2}assigned\s+to\b/i },
+  {
+    id: 'assign-responders',
+    re: /\bassign(?:ing|ed)?\s+(?:\w+\s+){0,3}(?:team|teams|responder|responders|crew|unit|units|personnel)\b/i
+  },
+  {
+    id: 'responders-assigned',
+    re: /\b(?:team|teams|responder|responders|crew|unit|units|personnel|helicopter)\s+(?:\w+\s+){0,2}assigned\s+to\b/i
+  },
   { id: 'go-there', re: /\b(?:you|they|responders|teams)\s+should\s+(?:go|proceed|move|head)\b/i },
   { id: 'proceed-to', re: /\bproceed\s+(?:immediately\s+)?to\b/i },
   { id: 'recommend-evacuating', re: /\brecommend(?:s|ed|ing)?\s+(?:\w+\s+){0,2}evacuat/i },
-  { id: 'prioritise-sending', re: /\bpriorit(?:ise|ize)\s+(?:\w+\s+){0,2}(?:sending|deploying|dispatch)/i },
+  {
+    id: 'prioritise-sending',
+    re: /\bpriorit(?:ise|ize)\s+(?:\w+\s+){0,2}(?:sending|deploying|dispatch)/i
+  },
   { id: 'tasking', re: /\btask(?:ing|ed)\s+(?:\w+\s+){0,3}(?:with|to)\s+(?:reach|search|rescue)/i },
   { id: 'imperative-evacuate', re: /^\s*evacuate\b/im }
 ];
@@ -82,7 +94,10 @@ export const FALSE_CERTAINTY_PATTERNS = [
   { id: 'confirmed-silent', re: /\bconfirm(?:ed|s)?\s+(?:as\s+)?(?:to\s+be\s+)?silent\b/i },
   { id: 'verified-silent', re: /\bverif(?:ied|y)\s+(?:as\s+)?silent\b/i },
   { id: 'known-silent', re: /\bknown\s+to\s+be\s+silent\b/i },
-  { id: 'confirmed-no-survivors', re: /\bconfirm(?:ed|s)?\s+(?:that\s+)?(?:no|zero)\s+(?:survivors|casualties|one)\b/i },
+  {
+    id: 'confirmed-no-survivors',
+    re: /\bconfirm(?:ed|s)?\s+(?:that\s+)?(?:no|zero)\s+(?:survivors|casualties|one)\b/i
+  },
   { id: 'confirmed-destroyed', re: /\bconfirm(?:ed|s)?\s+destroyed\b/i },
   { id: 'confirmed-safe', re: /\bconfirm(?:ed|s)?\s+safe\b/i },
   { id: 'definitely-silent', re: /\b(?:definitely|certainly)\s+silent\b/i }
@@ -97,7 +112,9 @@ export function walkStrings(value, { skipPaths = [], path = '$', depth = 0, out 
     return out;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => walkStrings(v, { skipPaths, path: `${path}[]`, depth: depth + 1, out }));
+    value.forEach((v, i) =>
+      walkStrings(v, { skipPaths, path: `${path}[]`, depth: depth + 1, out })
+    );
     return out;
   }
   if (value && typeof value === 'object') {

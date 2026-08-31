@@ -54,8 +54,17 @@
 // ---------------------------------------------------------------------------
 
 import {
-  makeScans, anyWordAt, phraseAt, findWord, findPhrase, negationBefore,
-  negationScopesVerb, uncoveredScripts, firstScriptSpan, keyWords, clip
+  makeScans,
+  anyWordAt,
+  phraseAt,
+  findWord,
+  findPhrase,
+  negationBefore,
+  negationScopesVerb,
+  uncoveredScripts,
+  firstScriptSpan,
+  keyWords,
+  clip
 } from './text.js';
 import { SEVERITY, violation, makeVerdict, internalErrorVerdict } from './verdict.js';
 
@@ -67,34 +76,116 @@ import { SEVERITY, violation, makeVerdict, internalErrorVerdict } from './verdic
  * newspaper reports a deployment that already happened.
  */
 const DISPATCH_VERBS = new Set([
-  'send', 'sends', 'sending', 'dispatch', 'dispatches', 'dispatching',
-  'despatch', 'despatching', 'deploy', 'deploys', 'deploying',
-  'assign', 'assigns', 'assigning', 'reassign',
-  'redirect', 'redirects', 'redirecting', 'reroute', 'reroutes',
-  'divert', 'diverts', 'diverting', 'allocate', 'allocates', 'allocating',
-  'mobilize', 'mobilise', 'mobilizes', 'mobilises', 'mobilizing', 'mobilising',
-  'scramble', 'scrambles', 'airlift', 'airlifts', 'airlifting'
+  'send',
+  'sends',
+  'sending',
+  'dispatch',
+  'dispatches',
+  'dispatching',
+  'despatch',
+  'despatching',
+  'deploy',
+  'deploys',
+  'deploying',
+  'assign',
+  'assigns',
+  'assigning',
+  'reassign',
+  'redirect',
+  'redirects',
+  'redirecting',
+  'reroute',
+  'reroutes',
+  'divert',
+  'diverts',
+  'diverting',
+  'allocate',
+  'allocates',
+  'allocating',
+  'mobilize',
+  'mobilise',
+  'mobilizes',
+  'mobilises',
+  'mobilizing',
+  'mobilising',
+  'scramble',
+  'scrambles',
+  'airlift',
+  'airlifts',
+  'airlifting'
 ]);
 
 const DISPATCH_PARTICIPLES = new Set([
-  'sent', 'dispatched', 'despatched', 'deployed', 'assigned', 'redirected',
-  'rerouted', 'diverted', 'allocated', 'mobilized', 'mobilised', 'airlifted',
-  'directed', 'routed', 'stationed'
+  'sent',
+  'dispatched',
+  'despatched',
+  'deployed',
+  'assigned',
+  'redirected',
+  'rerouted',
+  'diverted',
+  'allocated',
+  'mobilized',
+  'mobilised',
+  'airlifted',
+  'directed',
+  'routed',
+  'stationed'
 ]);
 
 /** Things that get dispatched. Multi-word entries are matched as phrases. */
 const RESOURCE_PHRASES = [
-  ['team'], ['teams'], ['crew'], ['crews'], ['responder'], ['responders'],
-  ['first', 'responders'], ['rescue'], ['rescuers'], ['rescue', 'team'],
-  ['rescue', 'teams'], ['search', 'team'], ['search', 'teams'],
-  ['search', 'and', 'rescue'], ['sar', 'team'], ['personnel'],
-  ['security', 'personnel'], ['helicopter'], ['helicopters'], ['chopper'],
-  ['choppers'], ['aircraft'], ['drone'], ['drones'], ['ambulance'],
-  ['ambulances'], ['convoy'], ['convoys'], ['troops'], ['soldiers'], ['army'],
-  ['police'], ['medics'], ['paramedics'], ['volunteers'], ['resources'],
-  ['resource'], ['assets'], ['units'], ['unit'], ['aid'], ['relief'],
-  ['supplies'], ['manpower'], ['boats'], ['help'], ['support'], ['responders'],
-  ['ndrf'], ['apf'], ['task', 'force']
+  ['team'],
+  ['teams'],
+  ['crew'],
+  ['crews'],
+  ['responder'],
+  ['responders'],
+  ['first', 'responders'],
+  ['rescue'],
+  ['rescuers'],
+  ['rescue', 'team'],
+  ['rescue', 'teams'],
+  ['search', 'team'],
+  ['search', 'teams'],
+  ['search', 'and', 'rescue'],
+  ['sar', 'team'],
+  ['personnel'],
+  ['security', 'personnel'],
+  ['helicopter'],
+  ['helicopters'],
+  ['chopper'],
+  ['choppers'],
+  ['aircraft'],
+  ['drone'],
+  ['drones'],
+  ['ambulance'],
+  ['ambulances'],
+  ['convoy'],
+  ['convoys'],
+  ['troops'],
+  ['soldiers'],
+  ['army'],
+  ['police'],
+  ['medics'],
+  ['paramedics'],
+  ['volunteers'],
+  ['resources'],
+  ['resource'],
+  ['assets'],
+  ['units'],
+  ['unit'],
+  ['aid'],
+  ['relief'],
+  ['supplies'],
+  ['manpower'],
+  ['boats'],
+  ['help'],
+  ['support'],
+  ['responders'],
+  ['ndrf'],
+  ['apf'],
+  ['task', 'force']
 ];
 
 const DIRECTIONAL = new Set(['to', 'toward', 'towards', 'into', 'onto', 'unto']);
@@ -104,13 +195,45 @@ const DIRECTIONAL = new Set(['to', 'toward', 'towards', 'into', 'onto', 'unto'])
  * means the sentence is telling somebody what to do.
  */
 const PRESCRIPTIVE = new Set([
-  'should', 'must', 'shall', 'ought', 'need', 'needs', 'needed', 'require',
-  'requires', 'required', 'recommend', 'recommends', 'recommended',
-  'recommending', 'recommendation', 'recommendations', 'advise', 'advises',
-  'advised', 'advice', 'suggest', 'suggests', 'suggested', 'suggestion',
-  'urge', 'urges', 'urging', 'propose', 'proposes', 'proposed', 'please',
-  'priority', 'prioritize', 'prioritise', 'prioritized', 'prioritised',
-  'immediately', 'urgently', 'asap'
+  'should',
+  'must',
+  'shall',
+  'ought',
+  'need',
+  'needs',
+  'needed',
+  'require',
+  'requires',
+  'required',
+  'recommend',
+  'recommends',
+  'recommended',
+  'recommending',
+  'recommendation',
+  'recommendations',
+  'advise',
+  'advises',
+  'advised',
+  'advice',
+  'suggest',
+  'suggests',
+  'suggested',
+  'suggestion',
+  'urge',
+  'urges',
+  'urging',
+  'propose',
+  'proposes',
+  'proposed',
+  'please',
+  'priority',
+  'prioritize',
+  'prioritise',
+  'prioritized',
+  'prioritised',
+  'immediately',
+  'urgently',
+  'asap'
 ]);
 
 /**
@@ -118,11 +241,43 @@ const PRESCRIPTIVE = new Set([
  * instructing it.
  */
 const REPORTING = new Set([
-  'was', 'were', 'been', 'being', 'is', 'are', 'am', 'has', 'have', 'had',
-  'already', 'reportedly', 'said', 'says', 'stated', 'announced', 'reported',
-  'reports', 'after', 'when', 'while', 'yesterday', 'earlier', 'today',
-  'plan', 'plans', 'planned', 'planning', 'began', 'begun', 'started',
-  'continued', 'continues', 'continuing', 'ordered', 'authorised', 'authorized'
+  'was',
+  'were',
+  'been',
+  'being',
+  'is',
+  'are',
+  'am',
+  'has',
+  'have',
+  'had',
+  'already',
+  'reportedly',
+  'said',
+  'says',
+  'stated',
+  'announced',
+  'reported',
+  'reports',
+  'after',
+  'when',
+  'while',
+  'yesterday',
+  'earlier',
+  'today',
+  'plan',
+  'plans',
+  'planned',
+  'planning',
+  'began',
+  'begun',
+  'started',
+  'continued',
+  'continues',
+  'continuing',
+  'ordered',
+  'authorised',
+  'authorized'
 ]);
 
 /**
@@ -131,73 +286,194 @@ const REPORTING = new Set([
  * anyone anywhere"). See README: this is also the rule's sharpest known edge.
  */
 const NEGATION = new Set([
-  'not', 'never', 'no', 'nor', 'cannot', 'cant', 'wont', 'dont', 'doesnt',
-  'didnt', 'without', 'refuse', 'refuses', 'refused', 'refrain', 'avoid',
-  'avoids', 'neither', 'nothing', 'none'
+  'not',
+  'never',
+  'no',
+  'nor',
+  'cannot',
+  'cant',
+  'wont',
+  'dont',
+  'doesnt',
+  'didnt',
+  'without',
+  'refuse',
+  'refuses',
+  'refused',
+  'refrain',
+  'avoid',
+  'avoids',
+  'neither',
+  'nothing',
+  'none'
 ]);
 
 /** Prescriptive modals for the "should go to" family. */
 const MODALS = new Set(['should', 'must', 'shall', 'ought', 'needs', 'need']);
 
 const MOVEMENT_VERBS = new Set([
-  'go', 'goes', 'going', 'move', 'moves', 'head', 'heads', 'proceed',
-  'proceeds', 'travel', 'travels', 'fly', 'flies', 'drive', 'walk', 'reach',
-  'reaches', 'enter', 'visit', 'respond', 'responds', 'deploy', 'dispatch',
-  'evacuate', 'evacuates'
+  'go',
+  'goes',
+  'going',
+  'move',
+  'moves',
+  'head',
+  'heads',
+  'proceed',
+  'proceeds',
+  'travel',
+  'travels',
+  'fly',
+  'flies',
+  'drive',
+  'walk',
+  'reach',
+  'reaches',
+  'enter',
+  'visit',
+  'respond',
+  'responds',
+  'deploy',
+  'dispatch',
+  'evacuate',
+  'evacuates'
 ]);
 
 /** Sentence-initial imperatives. Narrow on purpose - see README. */
 const IMPERATIVE_VERBS = new Set([
   ...DISPATCH_VERBS,
-  'go', 'move', 'head', 'proceed', 'evacuate', 'rush', 'fly', 'prioritize',
+  'go',
+  'move',
+  'head',
+  'proceed',
+  'evacuate',
+  'rush',
+  'fly',
+  'prioritize',
   'prioritise'
 ]);
 
 /** Nouns that make "priority" a dispatch decision rather than a sort order. */
 const DISPATCH_NOUNS = new Set([
-  'rescue', 'dispatch', 'deployment', 'deploy', 'deployments', 'evacuation',
-  'relief', 'aid', 'responders', 'helicopter', 'helicopters', 'teams', 'team',
-  'extraction', 'airlift', 'rescues'
+  'rescue',
+  'dispatch',
+  'deployment',
+  'deploy',
+  'deployments',
+  'evacuation',
+  'relief',
+  'aid',
+  'responders',
+  'helicopter',
+  'helicopters',
+  'teams',
+  'team',
+  'extraction',
+  'airlift',
+  'rescues'
 ]);
 
 /** Verbs of channelling effort somewhere. */
 const CHANNEL_VERBS = new Set([
-  'direct', 'directs', 'channel', 'channels', 'funnel', 'funnels', 'steer',
-  'steers', 'concentrate', 'concentrates', 'focus'
+  'direct',
+  'directs',
+  'channel',
+  'channels',
+  'funnel',
+  'funnels',
+  'steer',
+  'steers',
+  'concentrate',
+  'concentrates',
+  'focus'
 ]);
 
 const CHANNEL_OBJECTS = new Set([
-  'resources', 'resource', 'aid', 'relief', 'teams', 'team', 'responders',
-  'assets', 'effort', 'efforts', 'helicopters', 'personnel', 'manpower',
-  'capacity', 'rescue'
+  'resources',
+  'resource',
+  'aid',
+  'relief',
+  'teams',
+  'team',
+  'responders',
+  'assets',
+  'effort',
+  'efforts',
+  'helicopters',
+  'personnel',
+  'manpower',
+  'capacity',
+  'rescue'
 ]);
 
 /** Stock phrases that are dispatch instructions no matter how they are framed. */
 const STOCK_PHRASES = [
-  ['should', 'go', 'to'], ['should', 'be', 'the', 'first'],
-  ['first', 'stop'], ['next', 'stop'], ['first', 'place', 'to'],
-  ['priority', 'for', 'rescue'], ['rescue', 'priority'],
-  ['priority', 'for', 'deployment'], ['priority', 'for', 'evacuation'],
-  ['direct', 'resources'], ['send', 'help', 'to'], ['get', 'help', 'to'],
-  ['where', 'to', 'send'], ['who', 'to', 'send'], ['where', 'to', 'deploy'],
-  ['boots', 'on', 'the', 'ground'], ['go', 'there', 'now'],
-  ['head', 'to'], ['make', 'your', 'way', 'to'],
-  ['begin', 'rescue', 'at'], ['focus', 'rescue', 'on'],
-  ['top', 'of', 'the', 'dispatch'], ['dispatch', 'order'],
-  ['assign', 'a', 'team'], ['needs', 'a', 'team'], ['needs', 'a', 'rescue']
+  ['should', 'go', 'to'],
+  ['should', 'be', 'the', 'first'],
+  ['first', 'stop'],
+  ['next', 'stop'],
+  ['first', 'place', 'to'],
+  ['priority', 'for', 'rescue'],
+  ['rescue', 'priority'],
+  ['priority', 'for', 'deployment'],
+  ['priority', 'for', 'evacuation'],
+  ['direct', 'resources'],
+  ['send', 'help', 'to'],
+  ['get', 'help', 'to'],
+  ['where', 'to', 'send'],
+  ['who', 'to', 'send'],
+  ['where', 'to', 'deploy'],
+  ['boots', 'on', 'the', 'ground'],
+  ['go', 'there', 'now'],
+  ['head', 'to'],
+  ['make', 'your', 'way', 'to'],
+  ['begin', 'rescue', 'at'],
+  ['focus', 'rescue', 'on'],
+  ['top', 'of', 'the', 'dispatch'],
+  ['dispatch', 'order'],
+  ['assign', 'a', 'team'],
+  ['needs', 'a', 'team'],
+  ['needs', 'a', 'rescue']
 ];
 
 /** Prose keys that would BE a dispatch field if they landed in a JSON object. */
 const FIELD_VERBS = new Set([
-  'dispatch', 'deploy', 'deployment', 'assign', 'assigned', 'assignment',
-  'assignee', 'send', 'route', 'allocate', 'allocation', 'mobilize', 'airlift',
+  'dispatch',
+  'deploy',
+  'deployment',
+  'assign',
+  'assigned',
+  'assignment',
+  'assignee',
+  'send',
+  'route',
+  'allocate',
+  'allocation',
+  'mobilize',
+  'airlift',
   'tasking'
 ]);
 
 const FIELD_QUALIFIERS = new Set([
-  'to', 'target', 'targets', 'order', 'orders', 'list', 'team', 'teams',
-  'plan', 'action', 'assignment', 'destination', 'priority', 'queue', 'unit',
-  'units', 'instruction', 'instructions', 'recommendation'
+  'to',
+  'target',
+  'targets',
+  'order',
+  'orders',
+  'list',
+  'team',
+  'teams',
+  'plan',
+  'action',
+  'assignment',
+  'destination',
+  'priority',
+  'queue',
+  'unit',
+  'units',
+  'instruction',
+  'instructions',
+  'recommendation'
 ]);
 
 const SUGGESTIONS = {
@@ -207,8 +483,7 @@ const SUGGESTIONS = {
     'Rank order is a reading order, not a dispatch order. Say "ranked by unexplained silence", never "priority for rescue".',
   field:
     'No dispatch-shaped field may exist in any data structure. Drop the key; a sorted list to read is the only allowed artefact.',
-  imperative:
-    'Do not address the reader with an instruction. State the observation and stop.'
+  imperative: 'Do not address the reader with an instruction. State the observation and stop.'
 };
 
 // --- guards ----------------------------------------------------------------
@@ -218,7 +493,18 @@ const SUGGESTIONS = {
  * marks this: "is sending" narrates, "is send" is not a construction. So these
  * suppress only a gerund or participle.
  */
-const AUXILIARIES = new Set(['was', 'were', 'been', 'being', 'is', 'are', 'am', 'has', 'have', 'had']);
+const AUXILIARIES = new Set([
+  'was',
+  'were',
+  'been',
+  'being',
+  'is',
+  'are',
+  'am',
+  'has',
+  'have',
+  'had'
+]);
 
 /** Is the verb at `idx` an -ing / participle form an auxiliary could govern? */
 function isNonFiniteForm(scan, idx) {
@@ -380,8 +666,14 @@ function ruleShouldGo(scan, out, suppressed) {
 function rulePriority(scan, out, suppressed) {
   const { tokens } = scan;
   const PRIORITY_WORDS = new Set([
-    'priority', 'priorities', 'prioritize', 'prioritise', 'prioritized',
-    'prioritised', 'prioritizing', 'prioritising'
+    'priority',
+    'priorities',
+    'prioritize',
+    'prioritise',
+    'prioritized',
+    'prioritised',
+    'prioritizing',
+    'prioritising'
   ]);
   for (let i = 0; i < tokens.length; i++) {
     if (!anyWordAt(scan, i, PRIORITY_WORDS)) continue;
@@ -395,7 +687,11 @@ function rulePriority(scan, out, suppressed) {
     const span = scan.spanForTokens(lo, hi);
     const negIdx = negationBefore(scan, lo, NEGATION);
     if (negIdx !== -1 && negationScopesVerb(scan, negIdx, lo)) {
-      suppressed.push({ rule, reason: `negated by "${tokens[negIdx].t}"`, matched: clip(span.text) });
+      suppressed.push({
+        rule,
+        reason: `negated by "${tokens[negIdx].t}"`,
+        matched: clip(span.text)
+      });
       continue;
     }
     out.push(
@@ -459,9 +755,13 @@ function ruleImperativeSentence(scan, out, suppressed) {
 
     const rule = 'dispatch.imperative-sentence';
     const span = scan.spanForTokens(i, Math.min(last, i + 8));
-    const negIdx = findWord(scan, NEGATION, i + 1, Math.min(last, i + 2));  // imperative: negation follows the verb
+    const negIdx = findWord(scan, NEGATION, i + 1, Math.min(last, i + 2)); // imperative: negation follows the verb
     if (negIdx !== -1) {
-      suppressed.push({ rule, reason: `negated by "${tokens[negIdx].t}"`, matched: clip(span.text) });
+      suppressed.push({
+        rule,
+        reason: `negated by "${tokens[negIdx].t}"`,
+        matched: clip(span.text)
+      });
       continue;
     }
 
@@ -574,8 +874,7 @@ function ruleFieldShape(rawText, out) {
       words.includes('action') &&
       words.some((w) => ['recommended', 'next', 'required', 'suggested'].includes(w));
 
-    const fires =
-      (hasVerb && (words.length === 1 || hasQualifier)) || isActionKey;
+    const fires = (hasVerb && (words.length === 1 || hasQualifier)) || isActionKey;
     if (!fires) continue;
 
     const start = m.index + m[0].indexOf(m[1]);
@@ -616,14 +915,34 @@ function ruleFieldShape(rawText, out) {
 const NE_SEND_STEMS = ['पठा', 'खटा', 'तैनाथ', 'परिचालन', 'परिचालित', 'डिस्प्याच'];
 
 const NE_RESOURCE_STEMS = [
-  'टोली', 'उद्धार', 'हेलिकप्टर', 'हेलिकोप्टर', 'सेना', 'प्रहरी', 'राहत',
-  'एम्बुलेन्स', 'बचाव', 'स्वयंसेवक', 'जनशक्ति', 'सामग्री', 'बचावकर्ता'
+  'टोली',
+  'उद्धार',
+  'हेलिकप्टर',
+  'हेलिकोप्टर',
+  'सेना',
+  'प्रहरी',
+  'राहत',
+  'एम्बुलेन्स',
+  'बचाव',
+  'स्वयंसेवक',
+  'जनशक्ति',
+  'सामग्री',
+  'बचावकर्ता'
 ];
 
 /** Imperative / modal / urgency markers. Without one of these nothing fires. */
 const NE_PRESCRIPTIVE = [
-  'नुहोस्', 'नुपर्', 'पर्छ', 'पर्ने', 'गर्नुपर्', 'आवश्यक', 'प्राथमिकता',
-  'तुरुन्त', 'तत्काल', 'अविलम्ब', 'सिफारिस'
+  'नुहोस्',
+  'नुपर्',
+  'पर्छ',
+  'पर्ने',
+  'गर्नुपर्',
+  'आवश्यक',
+  'प्राथमिकता',
+  'तुरुन्त',
+  'तत्काल',
+  'अविलम्ब',
+  'सिफारिस'
 ];
 
 /** Perfective / passive narration. Present in the window, nothing fires. */

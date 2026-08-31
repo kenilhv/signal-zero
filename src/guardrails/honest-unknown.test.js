@@ -96,12 +96,19 @@ for (const text of TRUE_NEGATIVES) {
 // ---------------------------------------------------------------------------
 
 test('cold-start: a bare silence claim demands the "reached us" framing', () => {
-  const v = assertBlocked('Haku has been silent for 41 hours.', 'honest.missing-cold-start-framing', COLD);
+  const v = assertBlocked(
+    'Haku has been silent for 41 hours.',
+    'honest.missing-cold-start-framing',
+    COLD
+  );
   assert.equal(v.violations[0].severity, 'high');
 });
 
 test('cold-start: the honest framing satisfies the rule', () => {
-  assertClean('Haku has been silent in our feed for 41 hours - no report has reached us from there.', COLD);
+  assertClean(
+    'Haku has been silent in our feed for 41 hours - no report has reached us from there.',
+    COLD
+  );
 });
 
 test('the framing rule is inert without a cold-start coverageBasis', () => {
@@ -155,7 +162,10 @@ test('negation from a PREVIOUS sentence does not excuse a dishonest claim', () =
 });
 
 test('generalized absence-as-evidence catches phrasing the fixed list misses', () => {
-  assertBlocked('The absence of any report is itself proof of the worst.', 'honest.absence-as-evidence');
+  assertBlocked(
+    'The absence of any report is itself proof of the worst.',
+    'honest.absence-as-evidence'
+  );
   assertClean('The absence of data is why this settlement ranks first.');
 });
 

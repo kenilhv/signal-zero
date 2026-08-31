@@ -1,0 +1,49 @@
+# Written BEFORE any Dockerfile exists, deliberately.
+#
+# `.env` is present in the working tree and holds live Bright Data and model-provider
+# credentials. `COPY . .` in a naive first Dockerfile would bake them into an image
+# layer, where `docker history` can read them back out even if a later layer deletes
+# the file. Excluding it after the fact does not un-publish a layer that already shipped.
+#
+# Verify after any Dockerfile change:
+#   docker history --no-trunc <image> | grep -i env
+#   docker run --rm --entrypoint sh <image> -c 'ls -a /app | grep -i "^\.env$"'   # expect nothing
+
+# ---- secrets -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- vcs / editor --------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+
+# ---- dependencies (reinstalled inside the image from the lockfile) -------
+node_modules
+npm-debug.log*
+
+# ---- eval + test output --------------------------------------------------
+# evals/report/latest.json is generated, can be large, and would invalidate the
+# layer cache on every run. The suite regenerates it.
+evals/report/*.json
+evals/.scratch
+coverage
+*.log
+
+# ---- docs and planning ---------------------------------------------------
+# Not needed at runtime. Excluded to keep the image small and the build context
+# fast, not because they are secret.
+docs
+*.md
+!README.md
+
+# ---- local tooling -------------------------------------------------------
+Dockerfile*
+docker-compose*.yml
+.dockerignore

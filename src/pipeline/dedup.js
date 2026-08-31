@@ -445,9 +445,7 @@ export function dedup(reports, settlements) {
 
   const admitted = scored.filter((p) => p.matchProbability >= ADMIT_THRESHOLD);
   const ambiguousPairs = scored
-    .filter(
-      (p) => p.matchProbability >= AMBIGUOUS_LOW && p.matchProbability < AMBIGUOUS_HIGH
-    )
+    .filter((p) => p.matchProbability >= AMBIGUOUS_LOW && p.matchProbability < AMBIGUOUS_HIGH)
     // Sorted most-likely-match first, so a caller that can only surface N
     // checkpoint items surfaces the N that matter most.
     .sort((a, b) => b.matchProbability - a.matchProbability)
@@ -487,9 +485,7 @@ export function dedup(reports, settlements) {
       }
 
       const confidence = inside.length
-        ? Number(
-            (inside.reduce((s, e) => s + e.matchProbability, 0) / inside.length).toFixed(4)
-          )
+        ? Number((inside.reduce((s, e) => s + e.matchProbability, 0) / inside.length).toFixed(4))
         : // Singleton cluster: no internal edges exist, so there is nothing to
           // average. 0.5 = "uncorroborated", not "confidently one event".
           0.5;
@@ -531,10 +527,26 @@ function decoratePair(pair, reports) {
     ...pair,
     settlementId: a?.settlementId || b?.settlementId || null,
     a: a
-      ? { id: a.id, sourceName: a.sourceName, sourceType: a.sourceType, title: a.title, url: a.url, publishedAt: a.publishedAt, settlementId: a.settlementId }
+      ? {
+          id: a.id,
+          sourceName: a.sourceName,
+          sourceType: a.sourceType,
+          title: a.title,
+          url: a.url,
+          publishedAt: a.publishedAt,
+          settlementId: a.settlementId
+        }
       : null,
     b: b
-      ? { id: b.id, sourceName: b.sourceName, sourceType: b.sourceType, title: b.title, url: b.url, publishedAt: b.publishedAt, settlementId: b.settlementId }
+      ? {
+          id: b.id,
+          sourceName: b.sourceName,
+          sourceType: b.sourceType,
+          title: b.title,
+          url: b.url,
+          publishedAt: b.publishedAt,
+          settlementId: b.settlementId
+        }
       : null,
     band: [AMBIGUOUS_LOW, AMBIGUOUS_HIGH],
     reason:
@@ -583,7 +595,12 @@ export function simulateAmbiguousPair(reports) {
     closest = {
       aId: a.id,
       bId: b.id,
-      vector: { geo: 'unknown', time: 'lt24h', text: 'med', source: a.sourceType === b.sourceType ? 'same' : 'diff' },
+      vector: {
+        geo: 'unknown',
+        time: 'lt24h',
+        text: 'med',
+        source: a.sourceType === b.sourceType ? 'same' : 'diff'
+      },
       textSimilarity: Number(cosineOfVectors(vectors.get(a.id), vectors.get(b.id)).toFixed(4)),
       hoursApart: null,
       matchProbability: mid,
@@ -639,8 +656,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   // Monotonicity: strong agreement must outscore weak agreement.
   const strong = fellegiSunter({ geo: 'same', time: 'lt6h', text: 'high', source: 'diff' });
   const weak = fellegiSunter({ geo: 'far', time: 'beyond', text: 'low', source: 'diff' });
-  assert(strong.matchProbability > 0.95, `strong agreement scores high (${strong.matchProbability})`);
-  assert(weak.matchProbability < 0.01, `total disagreement scores near zero (${weak.matchProbability})`);
+  assert(
+    strong.matchProbability > 0.95,
+    `strong agreement scores high (${strong.matchProbability})`
+  );
+  assert(
+    weak.matchProbability < 0.01,
+    `total disagreement scores near zero (${weak.matchProbability})`
+  );
   assert(
     strong.matchProbability > weak.matchProbability,
     'match probability is monotone in agreement'
@@ -650,25 +673,36 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   // Checkpoint would only ever see synthetic cases.
   const borderline = fellegiSunter({ geo: 'same', time: 'lt24h', text: 'med', source: 'diff' });
   assert(
-    borderline.matchProbability >= AMBIGUOUS_LOW &&
-      borderline.matchProbability < AMBIGUOUS_HIGH,
+    borderline.matchProbability >= AMBIGUOUS_LOW && borderline.matchProbability < AMBIGUOUS_HIGH,
     `same town / a day apart / moderate overlap is undecidable (${borderline.matchProbability})`
   );
 
   // Two outlets, same town, same hour, near-identical wording => one cluster.
   const dupA = mk(
-    'a1', 'np-nuwakot-betrawati', '2026-08-26T09:00:00Z', 'news', 'Kathmandu Post',
+    'a1',
+    'np-nuwakot-betrawati',
+    '2026-08-26T09:00:00Z',
+    'news',
+    'Kathmandu Post',
     'Forty households displaced in Betrawati',
     'Forty households were displaced in Betrawati after the Trishuli surge. The suspension bridge was damaged and the road is blocked.'
   );
   const dupB = mk(
-    'a2', 'np-nuwakot-betrawati', '2026-08-26T10:30:00Z', 'news', 'Republica',
+    'a2',
+    'np-nuwakot-betrawati',
+    '2026-08-26T10:30:00Z',
+    'news',
+    'Republica',
     '40 households displaced at Betrawati',
     '40 households displaced in Betrawati following the Trishuli surge. A suspension bridge was damaged and the road remains blocked.'
   );
   // Unrelated settlement, days later, different subject => must stay separate.
   const far = mk(
-    'a3', 'np-dhading-benighat', '2026-08-29T09:00:00Z', 'official', 'DEOC Dhading',
+    'a3',
+    'np-dhading-benighat',
+    '2026-08-29T09:00:00Z',
+    'official',
+    'DEOC Dhading',
     'Benighat relief distribution',
     'Relief materials were distributed to families in Benighat. A health post has been set up.'
   );
@@ -677,14 +711,26 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const { clusters, ambiguousPairs } = dedup(reports, []);
 
   assert(Array.isArray(clusters) && Array.isArray(ambiguousPairs), 'dedup returns both arrays');
-  assert(clusters.length === 2, `duplicates merge, far report stays alone (got ${clusters.length} clusters)`);
+  assert(
+    clusters.length === 2,
+    `duplicates merge, far report stays alone (got ${clusters.length} clusters)`
+  );
 
   const merged = clusters.find((c) => c.reportIds.length === 2);
   assert(Boolean(merged), 'the two near-identical reports landed in one cluster');
-  assert(merged.settlementId === 'np-nuwakot-betrawati', 'merged cluster carries the settlement id');
-  assert(merged.confidence >= ADMIT_THRESHOLD, `cluster confidence is the mean edge weight (${merged.confidence})`);
+  assert(
+    merged.settlementId === 'np-nuwakot-betrawati',
+    'merged cluster carries the settlement id'
+  );
+  assert(
+    merged.confidence >= ADMIT_THRESHOLD,
+    `cluster confidence is the mean edge weight (${merged.confidence})`
+  );
   assert(merged.sourceTypeDiversity === 1, 'both duplicates are news => diversity 1');
-  assert(dupA.clusterId && dupA.clusterId === dupB.clusterId, 'clusterId written back onto reports');
+  assert(
+    dupA.clusterId && dupA.clusterId === dupB.clusterId,
+    'clusterId written back onto reports'
+  );
   assert(far.clusterId !== dupA.clusterId, 'unrelated report has its own clusterId');
 
   const solo = clusters.find((c) => c.reportIds.length === 1);
@@ -702,12 +748,19 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const badly = refineComponent(
     ['x1', 'x2', 'x3', 'y1', 'y2', 'y3'],
     [
-      e('x1', 'x2', 0.97), e('x2', 'x3', 0.95), e('x1', 'x3', 0.96),
-      e('y1', 'y2', 0.98), e('y2', 'y3', 0.94), e('y1', 'y3', 0.93),
+      e('x1', 'x2', 0.97),
+      e('x2', 'x3', 0.95),
+      e('x1', 'x3', 0.96),
+      e('y1', 'y2', 0.98),
+      e('y2', 'y3', 0.94),
+      e('y1', 'y3', 0.93),
       e('x3', 'y1', 0.62) // the flimsy bridge
     ]
   );
-  assert(badly.length === 2, `weak bridge between two dense groups is cut (got ${badly.length} parts)`);
+  assert(
+    badly.length === 2,
+    `weak bridge between two dense groups is cut (got ${badly.length} parts)`
+  );
   assert(
     badly.every((part) => part.length === 3),
     'both sides of the cut survive intact'
@@ -717,8 +770,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const healthy = refineComponent(
     ['x1', 'x2', 'x3', 'y1', 'y2', 'y3'],
     [
-      e('x1', 'x2', 0.97), e('x2', 'x3', 0.95), e('x1', 'x3', 0.96),
-      e('y1', 'y2', 0.98), e('y2', 'y3', 0.94), e('y1', 'y3', 0.93),
+      e('x1', 'x2', 0.97),
+      e('x2', 'x3', 0.95),
+      e('x1', 'x3', 0.96),
+      e('y1', 'y2', 0.98),
+      e('y2', 'y3', 0.94),
+      e('y1', 'y3', 0.93),
       e('x3', 'y1', 0.93)
     ]
   );

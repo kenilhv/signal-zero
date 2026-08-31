@@ -72,7 +72,8 @@ export async function startServer({ port, env = {}, bootTimeoutMs = 45000 } = {}
       while (Date.now() < end) {
         const res = await request('GET', `${base}/api/state`);
         last = res;
-        if (res.ok && Array.isArray(res.json?.settlements) && res.json.settlements.length) return res;
+        if (res.ok && Array.isArray(res.json?.settlements) && res.json.settlements.length)
+          return res;
         await new Promise((r) => setTimeout(r, 400));
       }
       return last;
@@ -91,7 +92,8 @@ async function request(method, url, body, { timeoutMs = 90000, rawBody } = {}) {
   try {
     const res = await fetch(url, {
       method,
-      headers: body !== undefined || rawBody !== undefined ? { 'content-type': 'application/json' } : {},
+      headers:
+        body !== undefined || rawBody !== undefined ? { 'content-type': 'application/json' } : {},
       body: rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(timeoutMs)
     });
@@ -104,6 +106,13 @@ async function request(method, url, body, { timeoutMs = 90000, rawBody } = {}) {
     }
     return { ok: res.ok, status: res.status, text, json, ms: Date.now() - started };
   } catch (err) {
-    return { ok: false, status: 0, text: '', json: null, error: String(err.message || err), ms: Date.now() - started };
+    return {
+      ok: false,
+      status: 0,
+      text: '',
+      json: null,
+      error: String(err.message || err),
+      ms: Date.now() - started
+    };
   }
 }

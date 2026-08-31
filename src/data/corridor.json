@@ -1,17 +1,7 @@
 {
-  "np-rasuwa-timure": [
-    "np-rasuwa-syabrubesi"
-  ],
-  "np-rasuwa-syabrubesi": [
-    "np-rasuwa-dhunche",
-    "np-rasuwa-haku",
-    "np-rasuwa-timure"
-  ],
-  "np-rasuwa-haku": [
-    "np-rasuwa-dhunche",
-    "np-rasuwa-syabrubesi",
-    "np-rasuwa-uttargaya"
-  ],
+  "np-rasuwa-timure": ["np-rasuwa-syabrubesi"],
+  "np-rasuwa-syabrubesi": ["np-rasuwa-dhunche", "np-rasuwa-haku", "np-rasuwa-timure"],
+  "np-rasuwa-haku": ["np-rasuwa-dhunche", "np-rasuwa-syabrubesi", "np-rasuwa-uttargaya"],
   "np-rasuwa-dhunche": [
     "np-rasuwa-gosaikunda",
     "np-rasuwa-haku",
@@ -19,29 +9,16 @@
     "np-rasuwa-syabrubesi",
     "np-rasuwa-thulogaun"
   ],
-  "np-rasuwa-gosaikunda": [
-    "np-rasuwa-dhunche"
-  ],
-  "np-rasuwa-uttargaya": [
-    "np-nuwakot-betrawati",
-    "np-rasuwa-haku",
-    "np-rasuwa-ramche"
-  ],
+  "np-rasuwa-gosaikunda": ["np-rasuwa-dhunche"],
+  "np-rasuwa-uttargaya": ["np-nuwakot-betrawati", "np-rasuwa-haku", "np-rasuwa-ramche"],
   "np-rasuwa-ramche": [
     "np-nuwakot-betrawati",
     "np-rasuwa-dhunche",
     "np-rasuwa-kalikasthan",
     "np-rasuwa-uttargaya"
   ],
-  "np-rasuwa-kalikasthan": [
-    "np-nuwakot-betrawati",
-    "np-rasuwa-ramche",
-    "np-rasuwa-thulogaun"
-  ],
-  "np-rasuwa-thulogaun": [
-    "np-rasuwa-dhunche",
-    "np-rasuwa-kalikasthan"
-  ],
+  "np-rasuwa-kalikasthan": ["np-nuwakot-betrawati", "np-rasuwa-ramche", "np-rasuwa-thulogaun"],
+  "np-rasuwa-thulogaun": ["np-rasuwa-dhunche", "np-rasuwa-kalikasthan"],
   "np-nuwakot-betrawati": [
     "np-nuwakot-dupcheshwar",
     "np-nuwakot-meghang",
@@ -55,16 +32,8 @@
     "np-nuwakot-betrawati",
     "np-nuwakot-tarkeshwar"
   ],
-  "np-nuwakot-battar": [
-    "np-nuwakot-devighat",
-    "np-nuwakot-meghang",
-    "np-nuwakot-trishuli-bazar"
-  ],
-  "np-nuwakot-devighat": [
-    "np-nuwakot-battar",
-    "np-nuwakot-bidur",
-    "np-nuwakot-tadi"
-  ],
+  "np-nuwakot-battar": ["np-nuwakot-devighat", "np-nuwakot-meghang", "np-nuwakot-trishuli-bazar"],
+  "np-nuwakot-devighat": ["np-nuwakot-battar", "np-nuwakot-bidur", "np-nuwakot-tadi"],
   "np-nuwakot-bidur": [
     "np-dhading-galchhi",
     "np-nuwakot-belkotgadhi",
@@ -83,45 +52,23 @@
     "np-nuwakot-panchakanya",
     "np-nuwakot-suryagadhi"
   ],
-  "np-nuwakot-suryagadhi": [
-    "np-nuwakot-kispang",
-    "np-nuwakot-meghang",
-    "np-nuwakot-tadi"
-  ],
+  "np-nuwakot-suryagadhi": ["np-nuwakot-kispang", "np-nuwakot-meghang", "np-nuwakot-tadi"],
   "np-nuwakot-meghang": [
     "np-nuwakot-battar",
     "np-nuwakot-betrawati",
     "np-nuwakot-dupcheshwar",
     "np-nuwakot-suryagadhi"
   ],
-  "np-nuwakot-kispang": [
-    "np-dhading-netrawati",
-    "np-nuwakot-suryagadhi"
-  ],
-  "np-nuwakot-panchakanya": [
-    "np-dhading-galchhi",
-    "np-nuwakot-tadi"
-  ],
-  "np-nuwakot-dupcheshwar": [
-    "np-nuwakot-betrawati",
-    "np-nuwakot-meghang",
-    "np-nuwakot-shivapuri"
-  ],
-  "np-nuwakot-shivapuri": [
-    "np-nuwakot-dupcheshwar",
-    "np-nuwakot-likhu",
-    "np-nuwakot-tarkeshwar"
-  ],
+  "np-nuwakot-kispang": ["np-dhading-netrawati", "np-nuwakot-suryagadhi"],
+  "np-nuwakot-panchakanya": ["np-dhading-galchhi", "np-nuwakot-tadi"],
+  "np-nuwakot-dupcheshwar": ["np-nuwakot-betrawati", "np-nuwakot-meghang", "np-nuwakot-shivapuri"],
+  "np-nuwakot-shivapuri": ["np-nuwakot-dupcheshwar", "np-nuwakot-likhu", "np-nuwakot-tarkeshwar"],
   "np-nuwakot-tarkeshwar": [
     "np-nuwakot-belkotgadhi",
     "np-nuwakot-shivapuri",
     "np-nuwakot-trishuli-bazar"
   ],
-  "np-nuwakot-likhu": [
-    "np-dhading-dhunibesi",
-    "np-nuwakot-belkotgadhi",
-    "np-nuwakot-shivapuri"
-  ],
+  "np-nuwakot-likhu": ["np-dhading-dhunibesi", "np-nuwakot-belkotgadhi", "np-nuwakot-shivapuri"],
   "np-dhading-galchhi": [
     "np-dhading-gajuri",
     "np-dhading-nilkantha",
@@ -136,11 +83,7 @@
     "np-dhading-nilkantha",
     "np-dhading-thakre"
   ],
-  "np-dhading-benighat": [
-    "np-dhading-gajuri",
-    "np-dhading-khaniyabas",
-    "np-dhading-nilkantha"
-  ],
+  "np-dhading-benighat": ["np-dhading-gajuri", "np-dhading-khaniyabas", "np-dhading-nilkantha"],
   "np-dhading-nilkantha": [
     "np-dhading-benighat",
     "np-dhading-gajuri",
@@ -148,23 +91,8 @@
     "np-dhading-khaniyabas",
     "np-dhading-netrawati"
   ],
-  "np-dhading-thakre": [
-    "np-dhading-dhunibesi",
-    "np-dhading-gajuri",
-    "np-dhading-galchhi"
-  ],
-  "np-dhading-dhunibesi": [
-    "np-dhading-thakre",
-    "np-nuwakot-likhu"
-  ],
-  "np-dhading-netrawati": [
-    "np-dhading-khaniyabas",
-    "np-dhading-nilkantha",
-    "np-nuwakot-kispang"
-  ],
-  "np-dhading-khaniyabas": [
-    "np-dhading-benighat",
-    "np-dhading-netrawati",
-    "np-dhading-nilkantha"
-  ]
+  "np-dhading-thakre": ["np-dhading-dhunibesi", "np-dhading-gajuri", "np-dhading-galchhi"],
+  "np-dhading-dhunibesi": ["np-dhading-thakre", "np-nuwakot-likhu"],
+  "np-dhading-netrawati": ["np-dhading-khaniyabas", "np-dhading-nilkantha", "np-nuwakot-kispang"],
+  "np-dhading-khaniyabas": ["np-dhading-benighat", "np-dhading-netrawati", "np-dhading-nilkantha"]
 }

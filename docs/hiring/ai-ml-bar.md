@@ -790,7 +790,7 @@ buried in `docs/`.**
 
 ## 7. What Signal Zero must add or change — prioritised
 
-Context: 195 tests, 69 eval files, deterministic guardrails, 5 registered agents on a self-hosted
+Context: 195 tests, 157 eval checks (19 tracked files, 4 families), deterministic guardrails, 5 registered agents on a self-hosted
 TrueForge harness, verified human-in-the-loop tool approval, real per-turn telemetry, three genuine
 statistical methods (Fellegi-Sunter, Exponential/Gamma time-between-events, Getis-Ord Gi*). Verified
 gaps: no CI, no Dockerfile, no IaC, no linter, no types, in-memory store, no metrics/tracing, no
@@ -806,7 +806,7 @@ family this project can actually clear.
    `.github/workflows/ci.yml` running `npm test` and `npm run eval:strict` with a threshold gate.
    *Why:* OpenAI's Evals posting asks literally for *"continuous eval monitoring frameworks
    (regression/drift monitoring…)"*; Braintrust and Promptfoo exist as products because merge-blocking
-   eval gates are the practice. A repo with 69 eval files and no CI reads as "wrote evals for the
+   eval gates are the practice. A repo with 157 eval checks (19 tracked files, 4 families) and no CI reads as "wrote evals for the
    README." **Highest signal-per-hour item in this list, by a wide margin.**
 
 2. **A LICENSE file, and a SECURITY.md that is actually about LLM security.**
@@ -854,7 +854,7 @@ family this project can actually clear.
      Anthropic tools post argues *"what agents omit…can often be more important than what they
      include."* For a silence-ranking system, omission is literally the domain.
    - Publish a **failure taxonomy** derived from real observed failures, with a test per category.
-   *Why:* this is the single largest gap between "69 eval files" and what Cognition means by *"making
+   *Why:* this is the single largest gap between "157 eval checks (19 tracked files, 4 families)" and what Cognition means by *"making
    sure the numbers mean something."*
 
 7. **Persistence.** In-memory state that dies on restart contradicts every reliability claim the
