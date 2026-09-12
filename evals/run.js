@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { probeTrueforge } from './lib/harness-probe.js';
 import { C, renderSuite } from './lib/runner.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -51,30 +52,14 @@ process.env.OPENAI_API_KEY = '';
 process.env.TRUEFORGE_ENABLED = 'false';
 
 // --- is the harness actually there? ----------------------------------------
-async function probeTrueforge(url) {
-  if (opts.offline) return { reachable: false, reason: '--offline' };
-  try {
-    const res = await fetch(`${url}/api/v1/models`, { signal: AbortSignal.timeout(4000) });
-    if (!res.ok) return { reachable: false, reason: `HTTP ${res.status}` };
-    const json = await res.json();
-    const models = (json?.data || []).map((m) => m?.name).filter(Boolean);
-    const want = process.env.EVAL_TRUEFORGE_MODEL || 'nebius/signal-zero-triage';
-    if (!models.includes(want)) {
-      return {
-        reachable: false,
-        reason: `model "${want}" not registered (have: ${models.join(', ') || 'none'})`,
-        models
-      };
-    }
-    return { reachable: true, reason: null, models };
-  } catch (err) {
-    return { reachable: false, reason: String(err.message || err) };
-  }
-}
+// The definition of "reachable" lives in lib/harness-probe.js because family C
+// asks the SAME question again mid-run, and the two answers are compared. See
+// the header there for why that must not be two copies of this check.
+const probe = (url) => probeTrueforge(url, { offline: opts.offline });
 
 // --- go ---------------------------------------------------------------------
 const startedAt = Date.now();
-const tf = await probeTrueforge(opts.trueforgeUrl);
+const tf = await probe(opts.trueforgeUrl);
 
 console.log('');
 console.log(C.bold('  SIGNAL ZERO - EVALUATION SUITE'));

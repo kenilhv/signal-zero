@@ -53,7 +53,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GAZETTEER_PATH = path.join(HERE, '..', 'data', 'gazetteer.json');
 
 // Bound the demo: tier 3 is the only paid/slow path, so it is hard-capped.
-const MAX_LLM_CALLS = 6;
+// EXPORTED because the eval suite has to assert against the real number rather
+// than a copy of it. evals/families/c-guardrails.js drives 14 tier-3 cases
+// through a cap of 6; it only works because the probe gives each case its own
+// triage() call and therefore its own budget. A hard-coded 6 in the eval would
+// keep passing after this line changed, and the suite would quietly go back to
+// scoring "starved by our own budget" as "the model answered badly".
+export const MAX_LLM_CALLS = 6;
 const LLM_TIMEOUT_MS = 12000;
 
 /**

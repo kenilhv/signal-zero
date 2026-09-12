@@ -24,7 +24,9 @@ if (!inPath || !outPath) {
 const input = JSON.parse(fs.readFileSync(inPath, 'utf8'));
 
 const config = (await import(new URL('../../src/config.js', import.meta.url))).default;
-const { triage } = await import(new URL('../../src/pipeline/triage.js', import.meta.url));
+const { triage, MAX_LLM_CALLS } = await import(
+  new URL('../../src/pipeline/triage.js', import.meta.url)
+);
 const { store, recentIncidents, initBackend } = await import(
   new URL('../../src/store.js', import.meta.url)
 );
@@ -110,6 +112,19 @@ if (input.perCase) {
 const out = {
   ok: true,
   durationMs: Date.now() - started,
+  // ECHOED, NOT ASSUMED. The parent asked for a batching mode and a case count;
+  // this is what the child actually did. They can differ - a caller that forgets
+  // `perCase` still gets a full-looking result set, just one where triage's
+  // tier-3 cap silently starved most of the cases of the model. The parent
+  // asserts on these fields so that failure is named instead of being read as
+  // bad model behaviour.
+  probeConfig: {
+    perCase: Boolean(input.perCase),
+    caseCount: reports.length,
+    maxLlmCallsPerTriageCall: MAX_LLM_CALLS,
+    // With perCase the budget is per case; without it, one budget for the lot.
+    tier3BudgetForThisRun: input.perCase ? MAX_LLM_CALLS * reports.length : MAX_LLM_CALLS
+  },
   configInForce: {
     TRUEFORGE_ENABLED: config.TRUEFORGE_ENABLED,
     TRUEFORGE_BASE_URL: config.TRUEFORGE_BASE_URL,

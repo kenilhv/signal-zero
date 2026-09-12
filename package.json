@@ -23,7 +23,9 @@
     "eval:sync": "node scripts/sync-eval-readme.mjs",
     "eval:sync:check": "node scripts/sync-eval-readme.mjs --check",
     "test:coverage": "node --experimental-test-coverage --test",
-    "openapi:lint": "npx --yes @redocly/cli@2.49.0 lint openapi.yaml"
+    "openapi:lint": "npx --yes @redocly/cli@2.49.0 lint openapi.yaml",
+    "postinstall": "patch-package",
+    "trueforge": "node node_modules/@truefoundry/trueforge/dist/cli.js"
   },
   "dependencies": {
     "@truefoundry/trueforge-sdk": "^0.1.3",
@@ -33,6 +35,8 @@
     "pg": "^8.23.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.11"
+    "@biomejs/biome": "^2.5.11",
+    "@truefoundry/trueforge": "^0.1.4",
+    "patch-package": "^8.0.1"
   }
 }

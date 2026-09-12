@@ -1,0 +1,26 @@
+diff --git a/node_modules/kysely/dist/migration/file-migration-provider.js b/node_modules/kysely/dist/migration/file-migration-provider.js
+index ed94aeb..fd3ff83 100644
+--- a/node_modules/kysely/dist/migration/file-migration-provider.js
++++ b/node_modules/kysely/dist/migration/file-migration-provider.js
+@@ -1,3 +1,12 @@
++import { pathToFileURL as __kyselyPathToFileURL } from 'node:url';
++function __kyselyToFileUrl(p) {
++    // Node's ESM loader requires a file:// URL for an absolute path. On Windows
++    // the path.join() above yields a bare drive-letter path, which the loader
++    // rejects with "Received protocol 'c:'", so TrueForge never gets past its
++    // 14 startup migrations. Already-a-URL is passed through untouched.
++    if (p.startsWith('file://')) return p;
++    return __kyselyPathToFileURL(p).href;
++}
+ /// <reference types="./file-migration-provider.d.ts" />
+ import { isFunction, isObject } from '../util/object-utils.js';
+ /**
+@@ -32,7 +41,7 @@ export class FileMigrationProvider {
+             const filePath = this.#props.path.join(this.#props.migrationFolder, fileName);
+             const migration = this.#props.import
+                 ? await this.#props.import(filePath)
+-                : await import(/* webpackIgnore: true */ filePath);
++                : await import(/* webpackIgnore: true */ __kyselyToFileUrl(filePath));
+             const migrationKey = fileName.substring(0, fileName.lastIndexOf('.'));
+             // Handle esModuleInterop export's `default` prop...
+             if (isMigration(migration?.default)) {

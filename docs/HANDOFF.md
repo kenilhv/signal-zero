@@ -72,13 +72,14 @@ docker run -d --name sz-pg \
   -e POSTGRES_PASSWORD=signalzero -e POSTGRES_USER=signalzero -e POSTGRES_DB=signalzero \
   -p 5544:5432 postgres:17-alpine
 
-# TrueForge. It CRASHES on Windows natively (upstream ESM bug, root-caused in
-# docs/trueforge-windows-bug.md), so it runs in a Linux container. --privileged and
-# the extra packages are what enable the local sandbox, which gates Skills.
-# Full recipe and the API calls to re-register the provider, MCP server and agents
-# are in docs/trueforge-verified.md.
-docker run -d --name tforge --privileged -p 4000:4000 -e PORT=4000 -e HOST=0.0.0.0 \
-  tforge-sandboxed
+# TrueForge now runs NATIVELY on Windows - no container needed. The upstream ESM
+# bug (docs/trueforge-windows-bug.md) is fixed by patches/kysely+0.29.5.patch,
+# applied automatically by `postinstall: patch-package` on every npm install.
+#   npm install && PORT=4000 HOST=0.0.0.0 npm run trueforge
+# Then register the provider + MCP server (curl in docs/trueforge-verified.md)
+# and `node scripts/load-agents.mjs`. The only thing the container still buys is
+# the local sandbox (Linux-only), which gates Skills - not needed for the evals:
+#   docker run -d --name tforge --privileged -p 4000:4000 -e PORT=4000 -e HOST=0.0.0.0 tforge-sandboxed
 ```
 
 TrueForge state (model provider, Bright Data MCP server, the 5 registered agents)
@@ -138,13 +139,25 @@ as freshly heard-from when nothing had been heard. Now eval `D13`.
    **Not done:** idempotency keys on `POST /api/run` and the checkpoint decision
    routes, and reconciling `openapi.yaml` against the routes as they changed.
 
-2. **Family C cannot tell "the model answered badly" from "the model was taken
-   away".** If TrueForge disappears mid-run the family FAILS when it should SKIP —
-   a failure blames the product for infrastructure pulled out from under it. This
-   was discovered the hard way: three separate diagnoses of a "family C bug" were
-   wrong, and the real cause was a concurrent agent running `docker stop tforge` to
-   test fault paths. The eval was reporting the truth throughout. Needs a quiet
-   machine to build and verify against.
+2. ~~**Family C cannot tell "the model answered badly" from "the model was taken
+   away".**~~ **FIXED.** Three causes produce an identically-shaped row —
+   unresolved, `executor: 'none'`, no guardrail block — and all three were scored
+   as the first: the model ignoring instructions (the product's fault), the
+   harness stopping mid-run (the machine's), and triage's tier-3 cap refusing the
+   case a slot (this eval's). `evals/lib/fates.js` now separates them off the
+   `llm-fallback` incident triage writes when it gives up, so the distinction
+   rests on the product's own record rather than on the shape of the row.
+   Family C re-probes the harness through the same `probeTrueforge` the run
+   started with and SKIPS rather than FAILS when it has gone; `C1.1`–`C1.7` skip
+   too, since they are all negatives and would otherwise go green on a run that
+   never asked the model anything. New `C1.0d` catches the budget case.
+
+   Measured against the LIVE harness (native TrueForge, real Nebius model, no
+   stub anywhere): healthy run **38/38 pass**; TrueForge killed mid-probe →
+   **29/38 pass, 0 fail, 9 skip**, with `adversarial.harnessWithdrawn` naming
+   adv22 (`harness-turn-failed`) and adv23/24 (`no-executor`). Under the old
+   classifier the same kill produced 2 critical failures. The classifier and
+   the pass/fail/skip decision table are unit-tested in `test/eval-fates.test.js`.
 
 3. **One intermittent test.** A single run showed 285/286; three subsequent runs
    showed 286/286 and the failing test was not captured. Unidentified. Suspect a
